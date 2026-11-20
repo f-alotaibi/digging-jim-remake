@@ -2,16 +2,28 @@
 #include "HUD/Panel.h"
 #include "Editor/Editor.h"
 
-static constexpr float PANEL_W      = 104.f;
+static constexpr float PANEL_W      = 120.f;
+static constexpr float PALETTE_H    = 342.f;
+static constexpr float SB_THICK     = 16.f;
+static constexpr float SB_X         = 104.f;
 static constexpr float FILL_Y       = 460.f;
-static constexpr float FILL_LX      = 10.f;
-static constexpr float FILL_CX      = 40.f;
-static constexpr float FILL_RX      = 70.f;
+static constexpr float FILL_LX      = 4.f;
+static constexpr float FILL_CX      = 32.f;
+static constexpr float FILL_RX      = 60.f;
+static constexpr float SELECT_X     = 88.f;
+static constexpr float SELECT_Y     = 461.f;
+static constexpr float SELECT_S     = 24.f;
+static constexpr float TEST_Y       = 434.f;
+static constexpr float TEST_X       = 4.f;
+static constexpr float TEST_W       = 42.f;
+static constexpr float SIM_X        = 50.f;
+static constexpr float SIM_W        = 66.f;
+static constexpr float SIM_H        = 20.f;
 static constexpr float CORDS_BASE_X = (PANEL_W - 60.f) / 2.f;
 static constexpr float CORDS_BASE_Y = 348.f;
 
-HUD::Editor::Panel::Panel(::Editor* editor) : m_editor(editor), m_tileRenderer(&editor->imageManager) {
-    m_background.setSize(sf::Vector2f(104.f, 342.f));
+HUD::Editor::Panel::Panel(::Editor* editor) : m_editor(editor), m_tileRenderer(&editor->game.imageManager) {
+    m_background.setSize(sf::Vector2f(PANEL_W, PALETTE_H));
     m_background.setFillColor(sf::Color(128, 128, 128));
 
     m_selectedBox.setSize(sf::Vector2f(32.f, 32.f));
@@ -19,16 +31,55 @@ HUD::Editor::Panel::Panel(::Editor* editor) : m_editor(editor), m_tileRenderer(&
     m_selectedBox.setOutlineColor(sf::Color::Yellow);
     m_selectedBox.setOutlineThickness(2.f);
 
-    for (int y = 0; y < 10; ++y) {
+    for (int y = 0; y < TOTAL_PALETTE_ROWS; ++y) {
         for (int x = 0; x < 3; ++x) {
             Cave::Entity::Type type = getType(x, y);
-            m_entities[type] = getNewEntity(type);
+            if (type != Cave::Entity::Type::NoType)
+                m_entities[type] = getNewEntity(type);
         }
     }
+    for (const auto& variant : Cave::Entity::Pegul::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::Fusion::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::Pyrozo::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::God::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::Dirt::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::Moss::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::Jimlin::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::Gate::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::JimlinBlock::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::JimlinShipInactive::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::Cosmic::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::HiveMatriarch::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
+    for (const auto& variant : Cave::Entity::HiveWall::VARIANTS)
+        m_entities[variant.type] = getNewEntity(variant.type);
 
-    m_builderMenu.setSize(sf::Vector2f(PANEL_W, 496.f - 342.f));
+    if (m_entities.count(Cave::Entity::Type::Genom)) {
+        using G = Cave::Entity::Genom;
+        auto& genom = m_entities[Cave::Entity::Type::Genom];
+        m_genomLook = genom.spawnCredit;
+        // Constructor defaults wander+breed+drop; match Randomize-on by sampling behaviours too.
+        if (m_genomRandomize)
+            genom.stuckTicks = G::packBehaviour(
+                G::randomMovement(), G::randomCanBreed(), G::randomDropsDiamonds());
+    }
+    if (m_entities.count(Cave::Entity::Type::Fish))
+        m_fishLook = m_entities[Cave::Entity::Type::Fish].spawnCredit;
+
+    m_builderMenu.setSize(sf::Vector2f(PANEL_W, 496.f - PALETTE_H));
     m_builderMenu.setFillColor(sf::Color(128, 128, 128));
-    m_builderMenu.setPosition(sf::Vector2f(0.f, 342.f));
+    m_builderMenu.setPosition(sf::Vector2f(0.f, PALETTE_H));
 
     m_minimapVerts.setPrimitiveType(sf::PrimitiveType::Triangles);
 }
@@ -38,9 +89,9 @@ void HUD::Editor::Panel::load()
     if (!m_tileRenderer.load(Image::Texture::CaveTiles, { 32, 32 }))
         throw std::runtime_error("Error: Unable to load editor panel.\n");
 
-    const sf::Texture& fillTex   = m_editor->imageManager.getTexture(Image::Texture::EditorFill);
-    const sf::Texture& coordsTex = m_editor->imageManager.getTexture(Image::Texture::EditorCoords);
-    const sf::Texture& testTex   = m_editor->imageManager.getTexture(Image::Texture::EditorTestButton);
+    const sf::Texture& fillTex   = m_editor->game.imageManager.getTexture(Image::Texture::EditorFill);
+    const sf::Texture& coordsTex = m_editor->game.imageManager.getTexture(Image::Texture::EditorCoords);
+    const sf::Texture& testTex   = m_editor->game.imageManager.getTexture(Image::Texture::EditorTestButton);
 
     // 1×1 white pixel sampled from the blank gap in the label row
     m_cordsBackground.emplace(coordsTex, sf::IntRect({28, 10}, {1, 1}));
@@ -63,11 +114,29 @@ void HUD::Editor::Panel::load()
     initDigit(m_digitY2, 61.f, 3.f);
 
     m_testBtn.emplace(testTex, sf::IntRect({0, 0}, {42, 20}));
-    m_testBtn->setPosition({(PANEL_W - 42.f) / 2.f, 434.f});
+    m_testBtn->setPosition({TEST_X, TEST_Y});
+
+    if (!m_simFont.openFromFile("./assets/fonts/tahoma.ttf"))
+        throw std::runtime_error("Error: Unable to load editor button font.\n");
+    m_simLabel.emplace(m_simFont);
+    m_simLabel->setString("Simulate");
+    m_simLabel->setCharacterSize(11);
+    m_simLabel->setFillColor(sf::Color::Black);
 
     m_fillBtnL.emplace(fillTex, sf::IntRect({0,  0}, {24, 26}));  m_fillBtnL->setPosition({FILL_LX, FILL_Y});
     m_fillBtnC.emplace(fillTex, sf::IntRect({24, 0}, {24, 26}));  m_fillBtnC->setPosition({FILL_CX, FILL_Y});
     m_fillBtnR.emplace(fillTex, sf::IntRect({48, 0}, {24, 26}));  m_fillBtnR->setPosition({FILL_RX, FILL_Y});
+
+    const sf::Texture& selectTex = m_editor->game.imageManager.getTexture(Image::Texture::EditorSelect);
+    m_selectBtn.emplace(selectTex, sf::IntRect({0, 0}, {(int)SELECT_S, (int)SELECT_S}));
+    m_selectBtn->setPosition({SELECT_X, SELECT_Y});
+
+    if (!m_sbTex.loadFromFile("./assets/textures/Editor/scroll_bar.png"))
+        throw std::runtime_error("Error: Unable to load editor palette scrollbar.\n");
+    m_sbArrUp.emplace(m_sbTex, sf::IntRect({0,  0},  {16, 16}));
+    m_sbArrDown.emplace(m_sbTex, sf::IntRect({0,  16}, {16, 16}));
+    m_sbThumb.emplace(m_sbTex, sf::IntRect({0,  32}, {16, 16}));
+    m_sbBgTile.emplace(m_sbTex, sf::IntRect({16, 32}, {16, 16}));
 }
 
 int HUD::Editor::Panel::miniTileIndex(Cave::Entity::Type type)
@@ -104,6 +173,130 @@ int HUD::Editor::Panel::miniTileIndex(Cave::Entity::Type type)
     case T::TubeDown:        return 27;
     case T::StartDoor:       return 28;
     case T::ExitDoor:        return 29;
+    case T::Spinner:         return 30;
+    case T::BoulderEater:    return 31;
+    case T::Tetrapus:        return 32;
+    case T::Binocule:        return 33;
+    case T::Creep:           return 34;
+    case T::Sludg:           return 35;
+    case T::SaturatedSludg:  return 35;
+    case T::Glutton:         return 36;
+    case T::HollowDiamond:   return 37;
+    case T::TimeBomb:        return 38;
+    case T::Pyram:           return 39;
+    case T::Ruby:            return 40;
+    case T::MagicBoulder:    return 41;
+    case T::Puffer:          return 42;
+    case T::Blob:            return 43;
+    case T::Portal:          return 44;
+    case T::Mole:            return 45;
+    case T::Fan:             return 46;
+    case T::God:             return 47;
+    case T::Chaos:           return 65;
+    case T::JimlinShipInactive:
+    case T::JimlinShipActive: return 66;
+    case T::KingShipInactive:
+    case T::KingShipActive:   return 75;
+    case T::Singularity:      return 76;
+    case T::Ostia:            return 77;
+    case T::Murus:            return 78;
+    case T::Tera:             return 79;
+    case T::Vitus:            return 80;
+    case T::Adama:            return 81;
+    case T::Terminus:         return 82;
+    case T::Initia:           return 83;
+    case T::Nihilus:          return 84;
+    case T::JimlinDock:       return 85;
+    case T::Magma:            return 86;
+    case T::HotBoulder:       return 87;
+    case T::Lava:             return 88;
+    case T::Pyrozo:           return 89;
+    case T::PyrozoExtinguished: return 92;
+    case T::Hellgull:         return 90;
+    case T::Charia:           return 91;
+    case T::ObsidianWall:     return 93;
+    case T::ObsidianWallCracked: return 94;
+    case T::Worm:             return 95;
+    case T::WormBody:         return 96;
+    case T::HotBoulderEater:  return 97;
+    case T::Pyrobe:           return 98;
+    case T::Predator:         return 99;
+    case T::Plankton:         return 100;
+    case T::Macow:            return 101;
+    case T::MacowEgg:
+    case T::MacowEggHatch:    return 102;
+    case T::Moss:             return 103;
+    case T::Rose:             return 143;
+    case T::RoseFly:          return 144;
+    case T::MacowEggCook:
+    case T::MacowEggCooked:   return 104;
+    case T::Caterpillar:
+    case T::CaterpillarChrysalize: return 105;
+    case T::Butterfly:
+    case T::ButterflyRelease: return 106;
+    case T::Chrysalis:        return 107;
+    case T::Jelly:            return 108;
+    case T::MossyBoulder:     return 109;
+    case T::TrapEmpty:        return 110;
+    case T::TrapFilling:
+    case T::TrapFull:         return 111;
+    case T::Mimic:            return 112;
+    case T::Shade:            return 113;
+    case T::Grouper:          return 114;
+    case T::Genom:            return 115;
+    case T::Landmine:         return 116;
+    case T::Compressor:       return 117;
+    case T::HiveMatriarch:    return 118;
+    case T::HiveLarva:        return 119;
+    case T::HiveWall:         return 120;
+    case T::HiveMatriarchWall: return 121;
+    case T::HiveNurseryWall:  return 122;
+    case T::HiveServant:      return 123;
+    case T::HiveCollector:    return 124;
+    case T::HiveHunter:       return 125;
+    case T::HiveBuilder:      return 126;
+    case T::HiveGuard:        return 127;
+    case T::HiveDigger:       return 128;
+    case T::HiveStorageWall:  return 129;
+    case T::HiveLivingWall:   return 130;
+    case T::Water:            return 131;
+    case T::Fish:             return 132;
+    case T::Coral:            return 133;
+    case T::Parasite:         return 134;
+    case T::Lock:             return 135;
+    case T::Key:              return 136;
+    case T::Gravel:           return 137;
+    case T::Spinel:           return 138;
+    case T::Hourglass:        return 139;
+    case T::Emerald:          return 140;
+    case T::Lapis:            return 141;
+    case T::Agent:            return 142;
+    case T::Jimlin1:         return 67;
+    case T::Jimlin2:         return 68;
+    case T::Jimlin3:         return 69;
+    case T::JimlinBlock:     return 70;
+    case T::Jimlin4:         return 71;
+    case T::JimlinKing:      return 72;
+    case T::PrivateGate:     return 73;
+    case T::VaultButton:     return 74;
+    case T::Charger:         return 48;
+    case T::ChargerBody:     return 48;
+    case T::Well:            return 49;
+    case T::Chum:            return 50;
+    case T::GallopQueen:    return 51;
+    case T::GallopEgg:       return 52;
+    case T::Gallop:          return 53;
+    case T::PegulNormo:      return 54;
+    case T::PegulFatto:      return 55;
+    case T::PegulTallo:      return 56;
+    case T::PegulBieye:      return 57;
+    case T::PegulTrieye:     return 58;
+    case T::Fusion1:         return 59;
+    case T::Fusion2:         return 60;
+    case T::Fusion3:         return 61;
+    case T::Fusion4:         return 62;
+    case T::Fusion5:         return 64;
+    case T::Gate:             return 63;
     default:                 return 0;
     }
 }
@@ -157,24 +350,48 @@ void HUD::Editor::Panel::update(const Camera& panelCamera, const Camera* caveCam
     sf::Vector2f viewSize   = camera.getSize();
     sf::Vector2f viewCenter = camera.getCenter();
     sf::Vector2f topLeft    = viewCenter - viewSize / 2.f;
-    sf::Vector2i position   = { static_cast<int>(topLeft.x + viewSize.x - 104),
+    sf::Vector2i position   = { static_cast<int>(topLeft.x),
                                  static_cast<int>(topLeft.y) };
 
     m_background.setPosition(sf::Vector2f((float)position.x, (float)position.y));
-    m_selectedBox.setPosition({
-        m_selectedPosition.x * 34.f + 2.f + position.x,
-        m_selectedPosition.y * 34.f + 2.f + position.y
-    });
+    const int visY = m_selectedPosition.y - m_scrollRow;
+    if (visY < 0 || visY >= VISIBLE_PALETTE_ROWS)
+        m_selectedBox.setPosition({-100.f, -100.f});
+    else
+        m_selectedBox.setPosition({
+            m_selectedPosition.x * 34.f + 2.f + position.x,
+            visY * 34.f + 2.f + position.y
+        });
 
     std::vector<Cave::Entity::Base> entities;
-    for (int y = 0; y < 10; ++y)
+    bool tickFired = animate && m_TickCounter.onTick();
+    for (int y = m_scrollRow; y < m_scrollRow + VISIBLE_PALETTE_ROWS; ++y)
         for (int x = 0; x < 3; ++x) {
             Cave::Entity::Type type = getType(x, y);
-            if (animate && m_TickCounter.onTick()) m_entities[type].updateAnimation();
+            if (type == Cave::Entity::Type::NoType) {
+                entities.push_back(Cave::Entity::Base());
+                continue;
+            }
+            if (tickFired) {
+                if (type == Cave::Entity::Type::Puffer)
+                    m_entities[type].setAnimationFrame(0);
+                else if (type == Cave::Entity::Type::Charger)
+                    m_entities[type].setAnimationFrame(0);
+                else if (type == Cave::Entity::Type::Rose)
+                    ; // Hold last grow frame — never loop the sprout strip in the palette.
+                else if (type == Cave::Entity::Type::Mole) {
+                    if (m_entities[type].direction == Cave::Entity::Direction::NO_DIRECTION)
+                        m_entities[type].direction = Cave::Entity::Direction::UP;
+                    Cave::Entity::Mole::stepBlinkLoop(m_entities[type]);
+                }
+                else
+                    m_entities[type].updateAnimation();
+            }
             entities.push_back(m_entities[type]);
         }
 
-    m_tileRenderer.updateTexture(entities, position, sf::IntRect({ 0, 0 }, { 3, 10 }), 2);
+    m_tileRenderer.updateTexture(entities, position, sf::IntRect({ 0, 0 }, { 3, 10 }), 2,
+        sf::Color::White, true, false, true);
 
     auto digitRect = [](int n) { return sf::IntRect({n * 6, 0}, {6, 10}); };
 
@@ -226,7 +443,7 @@ void HUD::Editor::Panel::update(const Camera& panelCamera, const Camera* caveCam
             (fillMode == Cave::FillMode::Line)    ? Image::Texture::EditorLineFill    :
             (fillMode == Cave::FillMode::Ellipse) ? Image::Texture::EditorEllipseFill :
                                                     Image::Texture::EditorFill;
-        const sf::Texture& fillTex = m_editor->imageManager.getTexture(fillTexId);
+        const sf::Texture& fillTex = m_editor->game.imageManager.getTexture(fillTexId);
         if (m_fillBtnL) m_fillBtnL->setTexture(fillTex);
         if (m_fillBtnC) m_fillBtnC->setTexture(fillTex);
         if (m_fillBtnR) m_fillBtnR->setTexture(fillTex);
@@ -234,6 +451,16 @@ void HUD::Editor::Panel::update(const Camera& panelCamera, const Camera* caveCam
     m_fillBtnL->setTextureRect(m_fillSelected==0 ? sf::IntRect({0,  26},{24,26}) : sf::IntRect({0,  0},{24,26}));
     m_fillBtnC->setTextureRect(m_fillSelected==1 ? sf::IntRect({24, 26},{24,26}) : sf::IntRect({24, 0},{24,26}));
     m_fillBtnR->setTextureRect(m_fillSelected==2 ? sf::IntRect({48, 26},{24,26}) : sf::IntRect({48, 0},{24,26}));
+    if (m_selectBtn)
+        m_selectBtn->setTextureRect(m_fillSelected==3
+            ? sf::IntRect({0, (int)SELECT_S}, {(int)SELECT_S, (int)SELECT_S})
+            : sf::IntRect({0, 0}, {(int)SELECT_S, (int)SELECT_S}));
+
+    const float sbX = (float)position.x + SB_X;
+    const float sbY = (float)position.y;
+    if (m_sbArrUp)   m_sbArrUp->setPosition({sbX, sbY});
+    if (m_sbArrDown) m_sbArrDown->setPosition({sbX, sbY + PALETTE_H - SB_THICK});
+    if (m_sbThumb)   m_sbThumb->setPosition({sbX, sbY + scrollbarThumbY()});
 
     if (map) rebuildMinimap(*map);
 
@@ -263,8 +490,42 @@ void HUD::Editor::Panel::draw(sf::RenderTarget& target, sf::RenderStates states)
     noShader.shader = nullptr;
 
     target.draw(m_background,  noShader);
+    // Opaque backing so translucent water / coral frames read clearly in the palette.
+    {
+        const sf::Vector2f panelPos = m_background.getPosition();
+        for (int y = m_scrollRow; y < m_scrollRow + VISIBLE_PALETTE_ROWS; ++y) {
+            for (int x = 0; x < 3; ++x) {
+                const Cave::Entity::Type slotType = getType(x, y);
+                if (slotType != Cave::Entity::Type::Water
+                    && slotType != Cave::Entity::Type::Coral
+                    && slotType != Cave::Entity::Type::Parasite)
+                    continue;
+                const int visY = y - m_scrollRow;
+                sf::RectangleShape bg(sf::Vector2f(32.f, 32.f));
+                bg.setFillColor(sf::Color::Black);
+                bg.setPosition({
+                    x * 34.f + 2.f + panelPos.x,
+                    visY * 34.f + 2.f + panelPos.y
+                });
+                target.draw(bg, noShader);
+            }
+        }
+    }
     m_tileRenderer.render(target, states);
     target.draw(m_selectedBox, noShader);
+    if (m_sbBgTile)
+    {
+        sf::Sprite tile = *m_sbBgTile;
+        for (float y = SB_THICK; y < PALETTE_H - SB_THICK; y += SB_THICK)
+        {
+            tile.setPosition({m_background.getPosition().x + SB_X,
+                              m_background.getPosition().y + y});
+            target.draw(tile, noShader);
+        }
+    }
+    if (m_sbArrUp)   target.draw(*m_sbArrUp,   noShader);
+    if (m_sbArrDown) target.draw(*m_sbArrDown, noShader);
+    if (m_sbThumb)   target.draw(*m_sbThumb,   noShader);
     target.draw(m_builderMenu,   noShader);
     if (m_cordsBackground) target.draw(*m_cordsBackground, noShader);
     if (m_cordsLabelX) target.draw(*m_cordsLabelX, noShader);
@@ -276,7 +537,7 @@ void HUD::Editor::Panel::draw(sf::RenderTarget& target, sf::RenderStates states)
     if (m_digitY1)    target.draw(*m_digitY1,    noShader);
     if (m_digitY2)    target.draw(*m_digitY2,    noShader);
     sf::RenderStates minimapStates = states;
-    minimapStates.texture = &m_editor->imageManager.getTexture(Image::Texture::EditorMiniTiles);
+    minimapStates.texture = &m_editor->game.imageManager.getTexture(Image::Texture::EditorMiniTiles);
     target.draw(m_minimapVerts, minimapStates);
 
     sf::RectangleShape viewRect(m_minimapViewSize);
@@ -287,9 +548,62 @@ void HUD::Editor::Panel::draw(sf::RenderTarget& target, sf::RenderStates states)
     target.draw(viewRect, noShader);
 
     if (m_testBtn)    target.draw(*m_testBtn,    noShader);
+
+    {
+        const bool pressed = m_editor && m_editor->isSimulating();
+        const sf::Color face(212, 208, 200);
+        const sf::Color hi(255, 255, 255);
+        const sf::Color sh(128, 128, 128);
+        const sf::Color dk(0, 0, 0);
+        auto edge = [&](float x, float y, float w, float h, sf::Color c) {
+            sf::RectangleShape r({ w, h });
+            r.setPosition({ x, y });
+            r.setFillColor(c);
+            target.draw(r, noShader);
+        };
+        edge(SIM_X, TEST_Y, SIM_W, SIM_H, face);
+        if (!pressed) {
+            edge(SIM_X, TEST_Y, SIM_W, 1.f, hi);
+            edge(SIM_X, TEST_Y, 1.f, SIM_H, hi);
+            edge(SIM_X, TEST_Y + SIM_H - 1.f, SIM_W, 1.f, dk);
+            edge(SIM_X + SIM_W - 1.f, TEST_Y, 1.f, SIM_H, dk);
+            edge(SIM_X + 1.f, TEST_Y + SIM_H - 2.f, SIM_W - 2.f, 1.f, sh);
+            edge(SIM_X + SIM_W - 2.f, TEST_Y + 1.f, 1.f, SIM_H - 2.f, sh);
+        } else {
+            edge(SIM_X, TEST_Y, SIM_W, 1.f, dk);
+            edge(SIM_X, TEST_Y, 1.f, SIM_H, dk);
+            edge(SIM_X, TEST_Y + SIM_H - 1.f, SIM_W, 1.f, hi);
+            edge(SIM_X + SIM_W - 1.f, TEST_Y, 1.f, SIM_H, hi);
+            edge(SIM_X + 1.f, TEST_Y + 1.f, SIM_W - 2.f, 1.f, sh);
+            edge(SIM_X + 1.f, TEST_Y + 1.f, 1.f, SIM_H - 2.f, sh);
+        }
+        if (m_simLabel) {
+            sf::Text label = *m_simLabel;
+            if (m_editor && m_editor->isSimulating()) {
+                const int spd = m_editor->simSpeed();
+                if (spd <= 0) label.setString("Paused");
+                else if (spd == 2) label.setString("Sim 2x");
+                else if (spd >= 10) label.setString("Sim 10x");
+                else label.setString("Simulate");
+            }
+            else {
+                label.setString("Simulate");
+            }
+            const sf::FloatRect b = label.getLocalBounds();
+            const float ox = pressed ? 1.f : 0.f;
+            const float oy = pressed ? 1.f : 0.f;
+            label.setPosition({
+                SIM_X + (SIM_W - b.size.x) * 0.5f - b.position.x + ox,
+                TEST_Y + (SIM_H - b.size.y) * 0.5f - b.position.y + oy - 1.f
+            });
+            target.draw(label, noShader);
+        }
+    }
+
     if (m_fillBtnL)   target.draw(*m_fillBtnL,   noShader);
     if (m_fillBtnC)   target.draw(*m_fillBtnC,   noShader);
     if (m_fillBtnR)   target.draw(*m_fillBtnR,   noShader);
+    if (m_selectBtn)  target.draw(*m_selectBtn,  noShader);
 }
 
 void HUD::Editor::Panel::handleClick(sf::Vector2f vp, float panelX, float toolbarH)
@@ -297,28 +611,93 @@ void HUD::Editor::Panel::handleClick(sf::Vector2f vp, float panelX, float toolba
     float lx = vp.x - panelX;
     float ly = vp.y - toolbarH;
 
+    if (lx >= SB_X && lx < PANEL_W && ly >= 0.f && ly < PALETTE_H)
+    {
+        if (ly < SB_THICK)
+            handleScroll(1.f);
+        else if (ly >= PALETTE_H - SB_THICK)
+            handleScroll(-1.f);
+        else if (ly >= scrollbarThumbY() && ly < scrollbarThumbY() + SB_THICK)
+        {
+            m_sbDragging = true;
+            m_sbDragOffsetY = ly - scrollbarThumbY();
+        }
+        else
+        {
+            const float trackH = PALETTE_H - 2.f * SB_THICK;
+            const float thumbH = scrollbarThumbHeight();
+            float frac = 0.f;
+            if (trackH > thumbH)
+                frac = std::clamp((ly - SB_THICK - thumbH * 0.5f) / (trackH - thumbH), 0.f, 1.f);
+            setScrollRow((int)std::round(frac * (float)MAX_SCROLL_ROW));
+        }
+        return;
+    }
+
     int px = static_cast<int>(lx) / 34;
     int py = static_cast<int>(ly) / 34;
-    if (px >= 0 && px < 3 && py >= 0 && py < 10)
+    if (px >= 0 && px < 3 && py >= 0 && py < VISIBLE_PALETTE_ROWS && lx < SB_X)
     {
-        selectType(px, py);
+        selectType(px, py + m_scrollRow);
+        if (m_fillSelected == 3) m_fillSelected = 0;
         return;
     }
 
     if      (lx >= FILL_LX && lx < FILL_LX+24.f && ly >= FILL_Y && ly < FILL_Y+26.f) m_fillSelected = 0;
     else if (lx >= FILL_CX && lx < FILL_CX+24.f && ly >= FILL_Y && ly < FILL_Y+26.f) m_fillSelected = 1;
     else if (lx >= FILL_RX && lx < FILL_RX+24.f && ly >= FILL_Y && ly < FILL_Y+26.f) m_fillSelected = 2;
-    else if (lx >= (PANEL_W-42.f)/2.f && lx < (PANEL_W-42.f)/2.f+42.f &&
-             ly >= 434.f && ly < 454.f)
+    else if (lx >= SELECT_X && lx < SELECT_X+SELECT_S && ly >= SELECT_Y && ly < SELECT_Y+SELECT_S) m_fillSelected = 3;
+    else if (lx >= TEST_X && lx < TEST_X + TEST_W &&
+             ly >= TEST_Y && ly < TEST_Y + 20.f)
     {
         m_testPressed = true;
         m_editor->actionTest();
+    }
+    else if (lx >= SIM_X && lx < SIM_X + SIM_W &&
+             ly >= TEST_Y && ly < TEST_Y + SIM_H)
+    {
+        m_editor->actionSimulate();
     }
 }
 
 void HUD::Editor::Panel::handleRelease()
 {
     m_testPressed = false;
+    m_simPressed = false;
+    m_sbDragging = false;
+}
+
+void HUD::Editor::Panel::handleDrag(sf::Vector2f vp, float panelX, float toolbarH)
+{
+    if (!m_sbDragging) return;
+
+    float ly = vp.y - toolbarH;
+    const float trackH = PALETTE_H - 2.f * SB_THICK;
+    const float thumbH = scrollbarThumbHeight();
+    float frac = 0.f;
+    if (trackH > thumbH)
+        frac = std::clamp((ly - m_sbDragOffsetY - SB_THICK) / (trackH - thumbH), 0.f, 1.f);
+    setScrollRow((int)std::round(frac * (float)MAX_SCROLL_ROW));
+}
+
+float HUD::Editor::Panel::scrollbarThumbHeight() const
+{
+    return SB_THICK;
+}
+
+float HUD::Editor::Panel::scrollbarThumbY() const
+{
+    const float trackH = PALETTE_H - 2.f * SB_THICK;
+    const float thumbH = scrollbarThumbHeight();
+    if (MAX_SCROLL_ROW <= 0 || trackH <= thumbH)
+        return SB_THICK;
+    const float frac = (float)m_scrollRow / (float)MAX_SCROLL_ROW;
+    return SB_THICK + frac * (trackH - thumbH);
+}
+
+void HUD::Editor::Panel::setScrollRow(int row)
+{
+    m_scrollRow = std::clamp(row, 0, MAX_SCROLL_ROW);
 }
 
 bool HUD::Editor::Panel::getMinimapCavePos(sf::Vector2f vp, float panelX, float toolbarH, sf::Vector2f& outCavePos) const
@@ -347,8 +726,418 @@ void HUD::Editor::Panel::setMouseTile(int x, int y)
 }
 
 void HUD::Editor::Panel::selectType(const int& x, const int& y) {
-    m_selectedType     = getType(x, y);
+    Cave::Entity::Type type = getType(x, y);
+    if (type == Cave::Entity::Type::NoType) return;
+
+    m_selectedType     = type;
     m_selectedPosition = { x, y };
+
+    if (y < m_scrollRow)
+        m_scrollRow = y;
+    else if (y >= m_scrollRow + VISIBLE_PALETTE_ROWS)
+        m_scrollRow = y - VISIBLE_PALETTE_ROWS + 1;
+}
+
+void HUD::Editor::Panel::pickEntityType(Cave::Entity::Type type) {
+    using T = Cave::Entity::Type;
+    // Collapse runtime / transient forms onto the placeable palette entry.
+    switch (type) {
+    case T::StartDoorOpen: type = T::StartDoor; break;
+    case T::ExitDoorOpen:
+    case T::ExitDoorOpening:
+    case T::ExitDoorComplete:
+    case T::ExitDoorFinished: type = T::ExitDoor; break;
+    case T::MagicWallInactive:
+    case T::MagicWallUsed: type = T::MagicWallActive; break;
+    case T::HorizontalWall: type = T::HorizontalWallPlaceholder; break;
+    case T::VerticalWall: type = T::VerticalWallPlaceholder; break;
+    case T::DetonatorTriggered:
+    case T::DetonatorUsed: type = T::Detonator; break;
+    case T::SaturatedSludg: type = T::Sludg; break;
+    case T::MacowEggHatch: type = T::MacowEgg; break;
+    case T::MacowEggCook:
+    case T::MacowEggCooked: type = T::MacowEgg; break;
+    case T::CaterpillarChrysalize: type = T::Caterpillar; break;
+    case T::ButterflyRelease: type = T::Butterfly; break;
+    case T::TrapFilling:
+    case T::TrapFull: type = T::TrapEmpty; break;
+    case T::JimlinShipActive: type = T::JimlinShipInactive; break;
+    case T::KingShipActive: type = T::KingShipInactive; break;
+    case T::ChargerBody: type = T::Charger; break;
+    case T::WormBody: type = T::Worm; break;
+    case T::HotBoulderCracked: type = T::HotBoulder; break;
+    case T::GenomEgg: type = T::Genom; break;
+    case T::PyrozoExtinguished: type = T::Pyrozo; break;
+    case T::ObsidianWallCracked: type = T::ObsidianWall; break;
+    case T::HiveTurn: type = T::HiveLarva; break;
+    case T::HiveHunterBubble:
+    case T::NoType:
+        return;
+    default: break;
+    }
+
+    if (m_fillSelected == 3) m_fillSelected = 0;
+
+    if (Cave::Entity::isPegul(type)) { setPegulType(type); return; }
+    if (Cave::Entity::isFusion(type)) { setFusionType(type); return; }
+    if (Cave::Entity::isPyrozoVariant(type)) { setPyrozoType(type); return; }
+    if (Cave::Entity::isGodVariant(type)) { setGodType(type); return; }
+    if (Cave::Entity::isDirtVariant(type)) { setDirtType(type); return; }
+    if (Cave::Entity::isMossVariant(type)) { setMossType(type); return; }
+    if (Cave::Entity::isJimlin(type)) { setJimlinType(type); return; }
+    if (Cave::Entity::isGateVariant(type)) { setGateType(type); return; }
+    if (Cave::Entity::isJimlinBlockVariant(type)) { setJimlinBlockType(type); return; }
+    if (Cave::Entity::isJimlinShipVariant(type)) { setJimlinShipType(type); return; }
+    if (Cave::Entity::isSpaceSlotType(type)) { setSpaceSlotType(type); return; }
+    if (Cave::Entity::isHiveCreature(type)) { setHiveMatriarchType(type); return; }
+    if (Cave::Entity::isHiveBuilding(type)) { setHiveWallType(type); return; }
+
+    for (int y = 0; y < TOTAL_PALETTE_ROWS; ++y) {
+        for (int x = 0; x < 3; ++x) {
+            if (getType(x, y) == type) {
+                selectType(x, y);
+                return;
+            }
+        }
+    }
+}
+
+bool HUD::Editor::Panel::isPegulSlot(const int& x, const int& y) const {
+    return x == PegulSlotX && y == PegulSlotY;
+}
+
+void HUD::Editor::Panel::setPegulType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isPegul(type)) return;
+    m_pegulType = type;
+    selectType(PegulSlotX, PegulSlotY);
+}
+
+bool HUD::Editor::Panel::isFusionSlot(const int& x, const int& y) const {
+    return x == FusionSlotX && y == FusionSlotY;
+}
+
+void HUD::Editor::Panel::setFusionType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isFusion(type)) return;
+    m_fusionType = type;
+    selectType(FusionSlotX, FusionSlotY);
+}
+
+bool HUD::Editor::Panel::isPyrozoSlot(const int& x, const int& y) const {
+    return x == PyrozoSlotX && y == PyrozoSlotY;
+}
+
+void HUD::Editor::Panel::setPyrozoType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isPyrozoVariant(type)) return;
+    m_pyrozoType = type;
+    selectType(PyrozoSlotX, PyrozoSlotY);
+}
+
+bool HUD::Editor::Panel::isGodSlot(const int& x, const int& y) const {
+    return x == GodSlotX && y == GodSlotY;
+}
+
+void HUD::Editor::Panel::setGodType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isGodVariant(type)) return;
+    m_godType = type;
+    selectType(GodSlotX, GodSlotY);
+}
+
+bool HUD::Editor::Panel::isDirtSlot(const int& x, const int& y) const {
+    return x == DirtSlotX && y == DirtSlotY;
+}
+
+void HUD::Editor::Panel::setDirtType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isDirtVariant(type)) return;
+    m_dirtType = type;
+    selectType(DirtSlotX, DirtSlotY);
+}
+
+bool HUD::Editor::Panel::isMossSlot(const int& x, const int& y) const {
+    return x == MossSlotX && y == MossSlotY;
+}
+
+void HUD::Editor::Panel::setMossType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isMossVariant(type)) return;
+    m_mossType = type;
+    selectType(MossSlotX, MossSlotY);
+}
+
+bool HUD::Editor::Panel::isJimlinSlot(const int& x, const int& y) const {
+    return x == JimlinSlotX && y == JimlinSlotY;
+}
+
+void HUD::Editor::Panel::setJimlinType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isJimlin(type)) return;
+    m_jimlinType = type;
+    selectType(JimlinSlotX, JimlinSlotY);
+}
+
+bool HUD::Editor::Panel::isGateSlot(const int& x, const int& y) const {
+    return x == GateSlotX && y == GateSlotY;
+}
+
+void HUD::Editor::Panel::setGateType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isGateVariant(type)) return;
+    m_gateType = type;
+    selectType(GateSlotX, GateSlotY);
+}
+
+bool HUD::Editor::Panel::isJimlinBlockSlot(const int& x, const int& y) const {
+    return x == JimlinBlockSlotX && y == JimlinBlockSlotY;
+}
+
+void HUD::Editor::Panel::setJimlinBlockType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isJimlinBlockVariant(type)) return;
+    m_jimlinBlockType = type;
+    selectType(JimlinBlockSlotX, JimlinBlockSlotY);
+}
+
+bool HUD::Editor::Panel::isJimlinShipSlot(const int& x, const int& y) const {
+    return x == JimlinShipSlotX && y == JimlinShipSlotY;
+}
+
+void HUD::Editor::Panel::setJimlinShipType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isJimlinShipVariant(type)) return;
+    m_jimlinShipType = type;
+    selectType(JimlinShipSlotX, JimlinShipSlotY);
+}
+
+bool HUD::Editor::Panel::isSpaceSlot(const int& x, const int& y) const {
+    return x == SpaceSlotX && y == SpaceSlotY;
+}
+
+void HUD::Editor::Panel::setSpaceSlotType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isSpaceSlotType(type)) return;
+    m_spaceSlotType = type;
+    selectType(SpaceSlotX, SpaceSlotY);
+}
+
+bool HUD::Editor::Panel::isGenomSlot(const int& x, const int& y) const {
+    return x == GenomSlotX && y == GenomSlotY;
+}
+
+bool HUD::Editor::Panel::isFishSlot(const int& x, const int& y) const {
+    return x == FishSlotX && y == FishSlotY;
+}
+
+void HUD::Editor::Panel::syncGenomPaletteEntity() {
+    using G = Cave::Entity::Genom;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it == m_entities.end()) return;
+    if (m_genomRandomize) {
+        it->second.spawnCredit = G::randomLook();
+        it->second.stuckTicks = G::packBehaviour(
+            G::randomMovement(), G::randomCanBreed(), G::randomDropsDiamonds());
+    }
+    else {
+        if ((m_genomLook & G::LOOK_VALID) == 0)
+            m_genomLook = G::randomLook();
+        it->second.spawnCredit = m_genomLook;
+        it->second.stuckTicks = G::packBehaviour(m_genomMove, m_genomCanBreed, m_genomDropsDiamonds);
+    }
+}
+
+void HUD::Editor::Panel::setGenomRandomize(bool randomize) {
+    using G = Cave::Entity::Genom;
+    if (m_genomRandomize == randomize) return;
+    m_genomRandomize = randomize;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it == m_entities.end()) return;
+    if (randomize) {
+        // Fresh sample on the icon; keep m_genomLook/move as the last custom for when randomize turns off.
+        it->second.spawnCredit = G::randomLook();
+        it->second.stuckTicks = G::packBehaviour(
+            G::randomMovement(), G::randomCanBreed(), G::randomDropsDiamonds());
+    }
+    else {
+        // What you see becomes the fixed place look / behaviour.
+        if ((it->second.spawnCredit & G::LOOK_VALID) != 0)
+            m_genomLook = it->second.spawnCredit;
+        if ((m_genomLook & G::LOOK_VALID) == 0)
+            m_genomLook = G::randomLook();
+        m_genomMove = G::movement(it->second);
+        m_genomCanBreed = G::canBreed(it->second);
+        m_genomDropsDiamonds = G::dropsDiamonds(it->second);
+        it->second.spawnCredit = m_genomLook;
+        it->second.stuckTicks = G::packBehaviour(m_genomMove, m_genomCanBreed, m_genomDropsDiamonds);
+    }
+}
+
+void HUD::Editor::Panel::setGenomLook(int look) {
+    using G = Cave::Entity::Genom;
+    m_genomLook = G::enforceLook(
+        G::hue(look), G::satByte(look), G::wings(look), G::legs(look),
+        G::spikes(look), G::body(look), G::eyes(look), G::mouth(look));
+    m_genomRandomize = false;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end()) {
+        it->second.spawnCredit = m_genomLook;
+        it->second.stuckTicks = G::packBehaviour(m_genomMove, m_genomCanBreed, m_genomDropsDiamonds);
+    }
+}
+
+void HUD::Editor::Panel::setGenomMovement(int move) {
+    using G = Cave::Entity::Genom;
+    m_genomMove = G::clampMovement(move);
+    m_genomRandomize = false;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end())
+        it->second.stuckTicks = G::packBehaviour(m_genomMove, m_genomCanBreed, m_genomDropsDiamonds);
+}
+
+void HUD::Editor::Panel::setGenomCanBreed(bool enabled) {
+    using G = Cave::Entity::Genom;
+    m_genomCanBreed = enabled;
+    m_genomRandomize = false;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end())
+        it->second.stuckTicks = G::packBehaviour(m_genomMove, m_genomCanBreed, m_genomDropsDiamonds);
+}
+
+void HUD::Editor::Panel::setGenomDropsDiamonds(bool enabled) {
+    using G = Cave::Entity::Genom;
+    m_genomDropsDiamonds = enabled;
+    m_genomRandomize = false;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end())
+        it->second.stuckTicks = G::packBehaviour(m_genomMove, m_genomCanBreed, m_genomDropsDiamonds);
+}
+
+int HUD::Editor::Panel::getGenomPaletteLook() const {
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end() && (it->second.spawnCredit & Cave::Entity::Genom::LOOK_VALID) != 0)
+        return it->second.spawnCredit;
+    if ((m_genomLook & Cave::Entity::Genom::LOOK_VALID) != 0)
+        return m_genomLook;
+    using G = Cave::Entity::Genom;
+    return G::packLook(0, 255, 1, 0, 0, 0, 0, 0);
+}
+
+int HUD::Editor::Panel::getGenomPaletteMovement() const {
+    using G = Cave::Entity::Genom;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end())
+        return G::movement(it->second);
+    return G::clampMovement(m_genomMove);
+}
+
+bool HUD::Editor::Panel::getGenomPaletteCanBreed() const {
+    using G = Cave::Entity::Genom;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end())
+        return G::canBreed(it->second);
+    return m_genomCanBreed;
+}
+
+bool HUD::Editor::Panel::getGenomPaletteDropsDiamonds() const {
+    using G = Cave::Entity::Genom;
+    auto it = m_entities.find(Cave::Entity::Type::Genom);
+    if (it != m_entities.end())
+        return G::dropsDiamonds(it->second);
+    return m_genomDropsDiamonds;
+}
+
+void HUD::Editor::Panel::syncFishPaletteEntity() {
+    auto it = m_entities.find(Cave::Entity::Type::Fish);
+    if (it == m_entities.end()) return;
+    if (m_fishRandomize)
+        it->second.spawnCredit = Cave::Entity::Fish::randomLook();
+    else {
+        if ((m_fishLook & Cave::Entity::Fish::LOOK_VALID) == 0)
+            m_fishLook = Cave::Entity::Fish::randomLook();
+        it->second.spawnCredit = m_fishLook;
+    }
+}
+
+void HUD::Editor::Panel::setFishRandomize(bool randomize) {
+    if (m_fishRandomize == randomize) return;
+    m_fishRandomize = randomize;
+    auto it = m_entities.find(Cave::Entity::Type::Fish);
+    if (it == m_entities.end()) return;
+    if (randomize) {
+        it->second.spawnCredit = Cave::Entity::Fish::randomLook();
+    }
+    else {
+        if ((it->second.spawnCredit & Cave::Entity::Fish::LOOK_VALID) != 0)
+            m_fishLook = it->second.spawnCredit;
+        if ((m_fishLook & Cave::Entity::Fish::LOOK_VALID) == 0)
+            m_fishLook = Cave::Entity::Fish::randomLook();
+        it->second.spawnCredit = m_fishLook;
+    }
+}
+
+void HUD::Editor::Panel::setFishLook(int look) {
+    using F = Cave::Entity::Fish;
+    m_fishLook = F::enforceLook(F::hue(look), F::satByte(look));
+    m_fishRandomize = false;
+    auto it = m_entities.find(Cave::Entity::Type::Fish);
+    if (it != m_entities.end())
+        it->second.spawnCredit = m_fishLook;
+}
+
+int HUD::Editor::Panel::getFishPaletteLook() const {
+    auto it = m_entities.find(Cave::Entity::Type::Fish);
+    if (it != m_entities.end() && (it->second.spawnCredit & Cave::Entity::Fish::LOOK_VALID) != 0)
+        return it->second.spawnCredit;
+    if ((m_fishLook & Cave::Entity::Fish::LOOK_VALID) != 0)
+        return m_fishLook;
+    return Cave::Entity::Fish::packLook(0, 255);
+}
+
+bool HUD::Editor::Panel::handleRightClick(sf::Vector2f vp, float panelX, float toolbarH) {
+    float lx = vp.x - panelX;
+    float ly = vp.y - toolbarH;
+
+    // Right-click Simulate while running → speed dropdown (pause / 1x / 2x / 10x).
+    if (m_editor && m_editor->isSimulating()
+        && lx >= SIM_X && lx < SIM_X + SIM_W
+        && ly >= TEST_Y && ly < TEST_Y + SIM_H)
+    {
+        m_editor->actionOpenSimSpeedMenu();
+        return true;
+    }
+
+    int px = static_cast<int>(lx) / 34;
+    int py = static_cast<int>(ly) / 34;
+    if (px >= 0 && px < 3 && py >= 0 && py < VISIBLE_PALETTE_ROWS && lx < SB_X)
+    {
+        const int row = py + m_scrollRow;
+        if (isSpaceSlot(px, row) || isPegulSlot(px, row) || isFusionSlot(px, row) || isPyrozoSlot(px, row)
+            || isGodSlot(px, row)
+            || isJimlinSlot(px, row) || isGateSlot(px, row) || isJimlinBlockSlot(px, row)
+            || isJimlinShipSlot(px, row)
+            || isGenomSlot(px, row)
+            || isFishSlot(px, row)
+            || isMossSlot(px, row)
+            || isHiveMatriarchSlot(px, row)
+            || isHiveWallSlot(px, row))
+        {
+            selectType(px, row);
+            if (m_fillSelected == 3) m_fillSelected = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HUD::Editor::Panel::isHiveMatriarchSlot(const int& x, const int& y) const {
+    return x == HiveMatriarchSlotX && y == HiveMatriarchSlotY;
+}
+
+void HUD::Editor::Panel::setHiveMatriarchType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isHiveCreature(type)) return;
+    m_hiveMatriarchType = type;
+    selectType(HiveMatriarchSlotX, HiveMatriarchSlotY);
+}
+
+bool HUD::Editor::Panel::isHiveWallSlot(const int& x, const int& y) const {
+    return x == HiveWallSlotX && y == HiveWallSlotY;
+}
+
+void HUD::Editor::Panel::setHiveWallType(Cave::Entity::Type type) {
+    if (!Cave::Entity::isHiveBuilding(type)) return;
+    m_hiveWallType = type;
+    selectType(HiveWallSlotX, HiveWallSlotY);
 }
 
 Cave::Entity::Base HUD::Editor::Panel::getSelectedEntity() {
@@ -359,10 +1148,18 @@ Cave::Entity::Type HUD::Editor::Panel::getSelectedType() const {
     return m_selectedType;
 }
 
-Cave::Entity::Type HUD::Editor::Panel::getType(const int& x, const int& y) {
-    int num = std::clamp(y, 0, 14) * 3 + std::clamp(x, 0, 2);
+void HUD::Editor::Panel::handleScroll(float delta)
+{
+    if (delta > 0)
+        setScrollRow(m_scrollRow - 1);
+    else
+        setScrollRow(m_scrollRow + 1);
+}
+
+Cave::Entity::Type HUD::Editor::Panel::getType(const int& x, const int& y) const {
+    int num = std::clamp(y, 0, TOTAL_PALETTE_ROWS - 1) * 3 + std::clamp(x, 0, 2);
     switch (num) {
-    case 0:  return Cave::Entity::Type::Space;
+    case 0:  return m_spaceSlotType;
     case 1:  return Cave::Entity::Type::Dirt;
     case 2:  return Cave::Entity::Type::Boulder;
     case 3:  return Cave::Entity::Type::Diamond;
@@ -392,14 +1189,266 @@ Cave::Entity::Type HUD::Editor::Panel::getType(const int& x, const int& y) {
     case 27: return Cave::Entity::Type::TubeDown;
     case 28: return Cave::Entity::Type::StartDoor;
     case 29: return Cave::Entity::Type::ExitDoor;
-    default: return Cave::Entity::Type::Space;
+    case 30: return Cave::Entity::Type::Gravel;
+    case 31: return Cave::Entity::Type::Chum;
+    case 32: return Cave::Entity::Type::Magma;
+    case 33: return m_mossType;
+    case 34: return Cave::Entity::Type::Water;
+    case 35: return Cave::Entity::Type::MagicBoulder;
+    case 36: return Cave::Entity::Type::HotBoulder;
+    case 37: return Cave::Entity::Type::MossyBoulder;
+    case 38: return Cave::Entity::Type::HollowDiamond;
+    case 39: return Cave::Entity::Type::Ruby;
+    case 40: return Cave::Entity::Type::Pyrobe;
+    case 41: return Cave::Entity::Type::Spinel;
+    case 42: return Cave::Entity::Type::Hourglass;
+    case 43: return Cave::Entity::Type::Emerald;
+    case 44: return Cave::Entity::Type::Lapis;
+    case 45: return Cave::Entity::Type::TimeBomb;
+    case 46: return Cave::Entity::Type::TrapEmpty;
+    case 47: return Cave::Entity::Type::Landmine;
+    case 48: return Cave::Entity::Type::Lock;
+    case 49: return Cave::Entity::Type::Key;
+    case 50: return Cave::Entity::Type::Fan;
+    case 51: return m_gateType;
+    case 52: return m_jimlinBlockType;
+    case 53: return m_jimlinShipType;
+    case 54: return Cave::Entity::Type::Well;
+    case 55: return Cave::Entity::Type::Portal;
+    case 56: return Cave::Entity::Type::ObsidianWall;
+    case 57: return Cave::Entity::Type::Lava;
+    case 58: return Cave::Entity::Type::Mole;
+    case 59: return Cave::Entity::Type::Spinner;
+    case 60: return Cave::Entity::Type::Blob;
+    case 61: return Cave::Entity::Type::Sludg;
+    case 62: return m_pegulType;
+    case 63: return Cave::Entity::Type::BoulderEater;
+    case 64: return Cave::Entity::Type::Pyram;
+    case 65: return Cave::Entity::Type::Creep;
+    case 66: return Cave::Entity::Type::GallopEgg;
+    case 67: return Cave::Entity::Type::Gallop;
+    case 68: return Cave::Entity::Type::GallopQueen;
+    case 69: return Cave::Entity::Type::Tetrapus;
+    case 70: return Cave::Entity::Type::Glutton;
+    case 71: return Cave::Entity::Type::Binocule;
+    case 72: return m_fusionType;
+    case 73: return Cave::Entity::Type::Puffer;
+    case 74: return Cave::Entity::Type::Charger;
+    case 75: return m_pyrozoType;
+    case 76: return Cave::Entity::Type::Hellgull;
+    case 77: return Cave::Entity::Type::Charia;
+    case 78: return Cave::Entity::Type::Worm;
+    case 79: return Cave::Entity::Type::Plankton;
+    case 80: return Cave::Entity::Type::Predator;
+    case 81: return Cave::Entity::Type::MacowEgg;
+    case 82: return Cave::Entity::Type::Macow;
+    case 83: return Cave::Entity::Type::Jelly;
+    case 84: return Cave::Entity::Type::Caterpillar;
+    case 85: return Cave::Entity::Type::Butterfly;
+    case 86: return Cave::Entity::Type::Mimic;
+    case 87: return Cave::Entity::Type::Shade;
+    case 88: return Cave::Entity::Type::Grouper;
+    case 89: return Cave::Entity::Type::Genom;
+    case 90: return Cave::Entity::Type::Compressor;
+    case 91: return m_hiveMatriarchType;
+    case 92: return m_hiveWallType;
+    case 93: return Cave::Entity::Type::Fish;
+    case 94: return Cave::Entity::Type::Coral;
+    case 95: return Cave::Entity::Type::Parasite;
+    case 96: return Cave::Entity::Type::Agent;
+    case 97: return m_godType;
+    case 98: return m_jimlinType;
+    default: return Cave::Entity::Type::NoType;
     }
+}
+
+bool HUD::Editor::Panel::getPaletteSlotAt(sf::Vector2f vp, float panelX, float toolbarH,
+    int& outX, int& outY) const
+{
+    const float lx = vp.x - panelX;
+    const float ly = vp.y - toolbarH;
+    if (lx < 0.f || lx >= SB_X || ly < 0.f || ly >= PALETTE_H)
+        return false;
+    const int px = static_cast<int>(lx) / 34;
+    const int py = static_cast<int>(ly) / 34;
+    if (px < 0 || px >= 3 || py < 0 || py >= VISIBLE_PALETTE_ROWS)
+        return false;
+    outX = px;
+    outY = py + m_scrollRow;
+    return getType(outX, outY) != Cave::Entity::Type::NoType;
+}
+
+std::string HUD::Editor::Panel::getPaletteSlotName(const int& x, const int& y) const
+{
+    const Cave::Entity::Type type = getType(x, y);
+    if (type == Cave::Entity::Type::NoType)
+        return {};
+
+    auto labelOf = [](const auto& variants, Cave::Entity::Type t) -> const char* {
+        for (const auto& v : variants) {
+            if (v.type == t)
+                return v.label;
+        }
+        return nullptr;
+    };
+
+    // Multi-type slots: show the currently selected object only.
+    if (isSpaceSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::Cosmic::VARIANTS, type))
+            return label;
+    }
+    else if (isPegulSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::Pegul::VARIANTS, type))
+            return std::string("Pegul ") + label;
+    }
+    else if (isFusionSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::Fusion::VARIANTS, type))
+            return std::string("Fusion ") + label;
+    }
+    else if (isGodSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::God::VARIANTS, type))
+            return label;
+    }
+    else if (isDirtSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::Dirt::VARIANTS, type))
+            return label;
+    }
+    else if (isMossSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::Moss::VARIANTS, type))
+            return label;
+    }
+    else if (isJimlinSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::Jimlin::VARIANTS, type))
+            return std::string("Jimlin ") + label;
+    }
+    else if (isGateSlot(x, y)) {
+        if (type == Cave::Entity::Type::PrivateGate)
+            return "Private Gate";
+        return "Gate";
+    }
+    else if (isJimlinBlockSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::JimlinBlock::VARIANTS, type))
+            return label;
+    }
+    else if (isJimlinShipSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::JimlinShipInactive::VARIANTS, type))
+            return label;
+    }
+    else if (isPyrozoSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::Pyrozo::VARIANTS, type))
+            return label;
+    }
+    else if (isHiveMatriarchSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::HiveMatriarch::VARIANTS, type))
+            return std::string("Hive ") + label;
+    }
+    else if (isHiveWallSlot(x, y)) {
+        if (const char* label = labelOf(Cave::Entity::HiveWall::VARIANTS, type))
+            return label;
+    }
+
+    // Single-type slots — same names as the Tools menu.
+    switch (type) {
+    case Cave::Entity::Type::Dirt: return "Dirt";
+    case Cave::Entity::Type::Gravel: return "Gravel";
+    case Cave::Entity::Type::Boulder: return "Boulder";
+    case Cave::Entity::Type::Diamond: return "Diamond";
+    case Cave::Entity::Type::FragileDiamond: return "Fragile Diamond";
+    case Cave::Entity::Type::Ore: return "Granite Ore";
+    case Cave::Entity::Type::Wall: return "Wall";
+    case Cave::Entity::Type::SolidWall: return "Solid Wall";
+    case Cave::Entity::Type::MagicWallActive: return "Magic Wall";
+    case Cave::Entity::Type::HorizontalWallPlaceholder: return "Horizontal Expanding Wall";
+    case Cave::Entity::Type::VerticalWallPlaceholder: return "Vertical Expanding Wall";
+    case Cave::Entity::Type::Plasma: return "Plasma";
+    case Cave::Entity::Type::Protozo: return "Protozo";
+    case Cave::Entity::Type::CaveGull: return "Cave Gull";
+    case Cave::Entity::Type::Eater: return "Diamond Eater";
+    case Cave::Entity::Type::Aggressor: return "Aggressor";
+    case Cave::Entity::Type::Cilia: return "Cilia";
+    case Cave::Entity::Type::Amoeba: return "Amoeba";
+    case Cave::Entity::Type::Detonator: return "Detonator";
+    case Cave::Entity::Type::TNT: return "TNT Box";
+    case Cave::Entity::Type::Bomb: return "Drop Bomb";
+    case Cave::Entity::Type::TubeHorizontal: return "Horizontal Tube";
+    case Cave::Entity::Type::TubeVertical: return "Vertical Tube";
+    case Cave::Entity::Type::TubeCross: return "Cross Tube";
+    case Cave::Entity::Type::TubeLeft: return "Tube Left";
+    case Cave::Entity::Type::TubeRight: return "Tube Right";
+    case Cave::Entity::Type::TubeUp: return "Tube Up";
+    case Cave::Entity::Type::TubeDown: return "Tube Down";
+    case Cave::Entity::Type::StartDoor: return "Start Door";
+    case Cave::Entity::Type::ExitDoor: return "Exit Door";
+    case Cave::Entity::Type::HollowDiamond: return "Hollow Diamond";
+    case Cave::Entity::Type::Ruby: return "Ruby";
+    case Cave::Entity::Type::MagicBoulder: return "Magic Boulder";
+    case Cave::Entity::Type::Chum: return "Chum";
+    case Cave::Entity::Type::Fan: return "Fan";
+    case Cave::Entity::Type::TimeBomb: return "Time Bomb";
+    case Cave::Entity::Type::Well: return "Well";
+    case Cave::Entity::Type::Portal: return "Portal";
+    case Cave::Entity::Type::Mole: return "Mole";
+    case Cave::Entity::Type::Spinner: return "Spinner";
+    case Cave::Entity::Type::Blob: return "Blob";
+    case Cave::Entity::Type::Sludg: return "Sludg";
+    case Cave::Entity::Type::BoulderEater: return "Boulder Eater";
+    case Cave::Entity::Type::Pyram: return "Pyram";
+    case Cave::Entity::Type::GallopEgg: return "Gallop Egg";
+    case Cave::Entity::Type::Gallop: return "Gallop";
+    case Cave::Entity::Type::GallopQueen: return "Gallop Queen";
+    case Cave::Entity::Type::Creep: return "Creep";
+    case Cave::Entity::Type::Tetrapus: return "Tetrapus";
+    case Cave::Entity::Type::Glutton: return "Glutton";
+    case Cave::Entity::Type::Binocule: return "Binocule";
+    case Cave::Entity::Type::Puffer: return "Puffer";
+    case Cave::Entity::Type::Charger: return "Charger";
+    case Cave::Entity::Type::Magma: return "Magma";
+    case Cave::Entity::Type::HotBoulder: return "Hot Boulder";
+    case Cave::Entity::Type::Lava: return "Lava";
+    case Cave::Entity::Type::Hellgull: return "Hellgull";
+    case Cave::Entity::Type::Charia: return "Charia";
+    case Cave::Entity::Type::ObsidianWall: return "Obsidian Wall";
+    case Cave::Entity::Type::Worm: return "Worm";
+    case Cave::Entity::Type::Pyrobe: return "Pyrobe";
+    case Cave::Entity::Type::Predator: return "Predator";
+    case Cave::Entity::Type::Plankton: return "Plankton";
+    case Cave::Entity::Type::Macow: return "Macow";
+    case Cave::Entity::Type::MacowEgg: return "Macow Egg";
+    case Cave::Entity::Type::Moss: return "Moss";
+    case Cave::Entity::Type::Rose: return "Rose";
+    case Cave::Entity::Type::RoseFly: return "Rose Fly";
+    case Cave::Entity::Type::Caterpillar: return "Caterpillar";
+    case Cave::Entity::Type::Butterfly: return "Butterfly";
+    case Cave::Entity::Type::Jelly: return "Jelly";
+    case Cave::Entity::Type::MossyBoulder: return "Mossy Boulder";
+    case Cave::Entity::Type::TrapEmpty: return "Trap";
+    case Cave::Entity::Type::Mimic: return "Mimic";
+    case Cave::Entity::Type::Shade: return "Shade";
+    case Cave::Entity::Type::Grouper: return "Grouper";
+    case Cave::Entity::Type::Genom: return "Genom";
+    case Cave::Entity::Type::Landmine: return "Landmine";
+    case Cave::Entity::Type::Compressor: return "Compressor";
+    case Cave::Entity::Type::Water: return "Water";
+    case Cave::Entity::Type::Fish: return "Fish";
+    case Cave::Entity::Type::Coral: return "Coral";
+    case Cave::Entity::Type::Parasite: return "Parasite";
+    case Cave::Entity::Type::Agent: return "Agent";
+    case Cave::Entity::Type::Lock: return "Lock";
+    case Cave::Entity::Type::Key: return "Key";
+    case Cave::Entity::Type::Spinel: return "Spinel";
+    case Cave::Entity::Type::Hourglass: return "Hourglass";
+    case Cave::Entity::Type::Emerald: return "Emerald";
+    case Cave::Entity::Type::Lapis: return "Lapis";
+    default: break;
+    }
+    return {};
 }
 
 Cave::Entity::Base HUD::Editor::Panel::getNewEntity(Cave::Entity::Type type) {
     switch (type) {
     case Cave::Entity::Type::Space:           return Cave::Entity::Space();
     case Cave::Entity::Type::Dirt:            return Cave::Entity::Dirt();
+    case Cave::Entity::Type::Gravel:          return Cave::Entity::Gravel();
     case Cave::Entity::Type::Boulder:         return Cave::Entity::Boulder();
     case Cave::Entity::Type::Diamond:         return Cave::Entity::Diamond();
     case Cave::Entity::Type::FragileDiamond:  return Cave::Entity::FragileDiamond();
@@ -428,6 +1477,151 @@ Cave::Entity::Base HUD::Editor::Panel::getNewEntity(Cave::Entity::Type type) {
     case Cave::Entity::Type::TubeDown:        return Cave::Entity::TubeDown();
     case Cave::Entity::Type::StartDoor:       return Cave::Entity::StartDoor();
     case Cave::Entity::Type::ExitDoor:        return Cave::Entity::ExitDoor();
-    default:                                  return Cave::Entity::Space();
+    case Cave::Entity::Type::Spinner:         return Cave::Entity::Spinner();
+    case Cave::Entity::Type::BoulderEater:    return Cave::Entity::BoulderEater();
+    case Cave::Entity::Type::Tetrapus:        return Cave::Entity::Tetrapus();
+    case Cave::Entity::Type::Binocule:        return Cave::Entity::Binocule();
+    case Cave::Entity::Type::Creep:           return Cave::Entity::Creep();
+    case Cave::Entity::Type::Sludg:           return Cave::Entity::Sludg();
+    case Cave::Entity::Type::SaturatedSludg:  return Cave::Entity::SaturatedSludg();
+    case Cave::Entity::Type::Glutton:         return Cave::Entity::Glutton();
+    case Cave::Entity::Type::HollowDiamond:   return Cave::Entity::HollowDiamond();
+    case Cave::Entity::Type::TimeBomb:        return Cave::Entity::TimeBomb();
+    case Cave::Entity::Type::Pyram:           return Cave::Entity::Pyram();
+    case Cave::Entity::Type::Ruby:            return Cave::Entity::Ruby();
+    case Cave::Entity::Type::MagicBoulder:    return Cave::Entity::MagicBoulder();
+    case Cave::Entity::Type::Puffer:          return Cave::Entity::Puffer();
+    case Cave::Entity::Type::Blob:            return Cave::Entity::Blob();
+    case Cave::Entity::Type::Portal:          return Cave::Entity::Portal();
+    case Cave::Entity::Type::Mole:            return Cave::Entity::Mole();
+    case Cave::Entity::Type::Fan:             return Cave::Entity::Fan();
+    case Cave::Entity::Type::God:             return Cave::Entity::God();
+    case Cave::Entity::Type::Chaos:           return Cave::Entity::Chaos();
+    case Cave::Entity::Type::Charger: {
+        Cave::Entity::Charger charger;
+        charger.setAnimation(Cave::Entity::Animation{ { Cave::Entity::Charger::ICON_FRAME }, 0 });
+        return charger;
+    }
+    case Cave::Entity::Type::Well:            return Cave::Entity::Well();
+    case Cave::Entity::Type::Chum:            return Cave::Entity::Chum();
+    case Cave::Entity::Type::GallopQueen:    return Cave::Entity::GallopQueen();
+    case Cave::Entity::Type::GallopEgg:       return Cave::Entity::GallopEgg();
+    case Cave::Entity::Type::Gallop:          return Cave::Entity::Gallop();
+    case Cave::Entity::Type::PegulNormo:      return Cave::Entity::Pegul(Cave::Entity::Type::PegulNormo);
+    case Cave::Entity::Type::PegulFatto:      return Cave::Entity::Pegul(Cave::Entity::Type::PegulFatto);
+    case Cave::Entity::Type::PegulTallo:      return Cave::Entity::Pegul(Cave::Entity::Type::PegulTallo);
+    case Cave::Entity::Type::PegulBieye:      return Cave::Entity::Pegul(Cave::Entity::Type::PegulBieye);
+    case Cave::Entity::Type::PegulTrieye:     return Cave::Entity::Pegul(Cave::Entity::Type::PegulTrieye);
+    case Cave::Entity::Type::Fusion1:         return Cave::Entity::Fusion(Cave::Entity::Type::Fusion1);
+    case Cave::Entity::Type::Fusion2:         return Cave::Entity::Fusion(Cave::Entity::Type::Fusion2);
+    case Cave::Entity::Type::Fusion3:         return Cave::Entity::Fusion(Cave::Entity::Type::Fusion3);
+    case Cave::Entity::Type::Fusion4:         return Cave::Entity::Fusion(Cave::Entity::Type::Fusion4);
+    case Cave::Entity::Type::Fusion5:         return Cave::Entity::Fusion(Cave::Entity::Type::Fusion5);
+    case Cave::Entity::Type::Gate:            return Cave::Entity::Gate();
+    case Cave::Entity::Type::PrivateGate:     return Cave::Entity::PrivateGate();
+    case Cave::Entity::Type::VaultButton:     return Cave::Entity::VaultButton();
+    case Cave::Entity::Type::JimlinShipInactive: return Cave::Entity::JimlinShipInactive();
+    case Cave::Entity::Type::JimlinShipActive:   return Cave::Entity::JimlinShipActive();
+    case Cave::Entity::Type::KingShipInactive:   return Cave::Entity::KingShipInactive();
+    case Cave::Entity::Type::KingShipActive:     return Cave::Entity::KingShipActive();
+    case Cave::Entity::Type::Jimlin1:            return Cave::Entity::Jimlin(Cave::Entity::Type::Jimlin1);
+    case Cave::Entity::Type::Jimlin2:            return Cave::Entity::Jimlin(Cave::Entity::Type::Jimlin2);
+    case Cave::Entity::Type::Jimlin3:            return Cave::Entity::Jimlin(Cave::Entity::Type::Jimlin3);
+    case Cave::Entity::Type::Jimlin4:            return Cave::Entity::Jimlin(Cave::Entity::Type::Jimlin4);
+    case Cave::Entity::Type::JimlinKing:         return Cave::Entity::Jimlin(Cave::Entity::Type::JimlinKing);
+    case Cave::Entity::Type::JimlinBlock:        return Cave::Entity::JimlinBlock();
+    case Cave::Entity::Type::JimlinDock:         return Cave::Entity::JimlinDock();
+    case Cave::Entity::Type::Magma:              return Cave::Entity::Magma();
+    case Cave::Entity::Type::HotBoulder:         return Cave::Entity::HotBoulder();
+    case Cave::Entity::Type::Lava:               return Cave::Entity::Lava();
+    case Cave::Entity::Type::Pyrozo:             return Cave::Entity::Pyrozo();
+    case Cave::Entity::Type::PyrozoExtinguished: return Cave::Entity::Pyrozo(Cave::Entity::Type::PyrozoExtinguished);
+    case Cave::Entity::Type::Hellgull:           return Cave::Entity::Hellgull();
+    case Cave::Entity::Type::Charia:             return Cave::Entity::Charia();
+    case Cave::Entity::Type::ObsidianWall:       return Cave::Entity::ObsidianWall();
+    case Cave::Entity::Type::ObsidianWallCracked: return Cave::Entity::ObsidianWallCracked();
+    case Cave::Entity::Type::Worm:               return Cave::Entity::Worm();
+    case Cave::Entity::Type::WormBody:           return Cave::Entity::WormBody();
+    case Cave::Entity::Type::HotBoulderEater:    return Cave::Entity::HotBoulderEater();
+    case Cave::Entity::Type::Pyrobe:             return Cave::Entity::Pyrobe();
+    case Cave::Entity::Type::Predator:           return Cave::Entity::Predator();
+    case Cave::Entity::Type::Plankton:           return Cave::Entity::Plankton();
+    case Cave::Entity::Type::Macow:              return Cave::Entity::Macow();
+    case Cave::Entity::Type::MacowEgg:           return Cave::Entity::MacowEgg();
+    case Cave::Entity::Type::MacowEggCook:       return Cave::Entity::MacowEggCook();
+    case Cave::Entity::Type::MacowEggCooked:     return Cave::Entity::MacowEggCooked();
+    case Cave::Entity::Type::Moss:               return Cave::Entity::Moss();
+    case Cave::Entity::Type::Rose:               return Cave::Entity::Rose();
+    case Cave::Entity::Type::RoseFly:            return Cave::Entity::RoseFly();
+    case Cave::Entity::Type::Caterpillar:        return Cave::Entity::Caterpillar();
+    case Cave::Entity::Type::CaterpillarChrysalize: return Cave::Entity::CaterpillarChrysalize();
+    case Cave::Entity::Type::Chrysalis:          return Cave::Entity::Chrysalis();
+    case Cave::Entity::Type::ButterflyRelease:   return Cave::Entity::ButterflyRelease();
+    case Cave::Entity::Type::Butterfly:          return Cave::Entity::Butterfly();
+    case Cave::Entity::Type::Jelly:              return Cave::Entity::Jelly();
+    case Cave::Entity::Type::MossyBoulder:       return Cave::Entity::MossyBoulder();
+    case Cave::Entity::Type::TrapEmpty:         return Cave::Entity::TrapEmpty();
+    case Cave::Entity::Type::TrapFilling:       return Cave::Entity::TrapFilling();
+    case Cave::Entity::Type::TrapFull:          return Cave::Entity::TrapFull();
+    case Cave::Entity::Type::Mimic:             return Cave::Entity::Mimic();
+    case Cave::Entity::Type::Shade:             return Cave::Entity::Shade();
+    case Cave::Entity::Type::Grouper:           return Cave::Entity::Grouper();
+    case Cave::Entity::Type::Genom: {
+        using G = Cave::Entity::Genom;
+        Cave::Entity::Genom genom;
+        if (!m_genomRandomize) {
+            if ((m_genomLook & G::LOOK_VALID) != 0)
+                genom.spawnCredit = m_genomLook;
+            genom.stuckTicks = G::packBehaviour(m_genomMove, m_genomCanBreed, m_genomDropsDiamonds);
+        }
+        else {
+            genom.stuckTicks = G::packBehaviour(
+                G::randomMovement(), G::randomCanBreed(), G::randomDropsDiamonds());
+        }
+        return genom;
+    }
+    case Cave::Entity::Type::Landmine:         return Cave::Entity::Landmine();
+    case Cave::Entity::Type::Compressor:       return Cave::Entity::Compressor();
+    case Cave::Entity::Type::HiveMatriarch:    return Cave::Entity::HiveMatriarch();
+    case Cave::Entity::Type::HiveLarva:        return Cave::Entity::HiveLarva();
+    case Cave::Entity::Type::HiveWall:         return Cave::Entity::HiveWall();
+    case Cave::Entity::Type::HiveMatriarchWall: return Cave::Entity::HiveMatriarchWall();
+    case Cave::Entity::Type::HiveNurseryWall:  return Cave::Entity::HiveNurseryWall();
+    case Cave::Entity::Type::HiveServant:      return Cave::Entity::HiveServant();
+    case Cave::Entity::Type::HiveCollector:    return Cave::Entity::HiveCollector();
+    case Cave::Entity::Type::HiveHunter:       return Cave::Entity::HiveHunter();
+    case Cave::Entity::Type::HiveBuilder:      return Cave::Entity::HiveBuilder();
+    case Cave::Entity::Type::HiveGuard:        return Cave::Entity::HiveGuard();
+    case Cave::Entity::Type::HiveDigger:       return Cave::Entity::HiveDigger();
+    case Cave::Entity::Type::HiveStorageWall:  return Cave::Entity::HiveStorageWall();
+    case Cave::Entity::Type::HiveLivingWall:   return Cave::Entity::HiveLivingWall();
+    case Cave::Entity::Type::Water:            return Cave::Entity::Water();
+    case Cave::Entity::Type::Coral:           return Cave::Entity::Coral();
+    case Cave::Entity::Type::CoralBud:        return Cave::Entity::CoralBud();
+    case Cave::Entity::Type::Parasite:        return Cave::Entity::Parasite();
+    case Cave::Entity::Type::Agent:           return Cave::Entity::Agent();
+    case Cave::Entity::Type::Lock:            return Cave::Entity::Lock();
+    case Cave::Entity::Type::Key:             return Cave::Entity::Key();
+    case Cave::Entity::Type::Spinel:          return Cave::Entity::Spinel();
+    case Cave::Entity::Type::Hourglass:       return Cave::Entity::Hourglass();
+    case Cave::Entity::Type::Emerald:         return Cave::Entity::Emerald();
+    case Cave::Entity::Type::Lapis:           return Cave::Entity::Lapis();
+    case Cave::Entity::Type::Fish: {
+        Cave::Entity::Fish fish;
+        if (!m_fishRandomize && (m_fishLook & Cave::Entity::Fish::LOOK_VALID) != 0)
+            fish.spawnCredit = m_fishLook;
+        return fish;
+    }
+    case Cave::Entity::Type::Singularity:
+    case Cave::Entity::Type::Ostia:
+    case Cave::Entity::Type::Murus:
+    case Cave::Entity::Type::Tera:
+    case Cave::Entity::Type::Vitus:
+    case Cave::Entity::Type::Adama:
+    case Cave::Entity::Type::Terminus:
+    case Cave::Entity::Type::Initia:
+    case Cave::Entity::Type::Nihilus:
+        return Cave::Entity::Cosmic(type);
+    default:                                  return Cave::Entity::Base();
     }
 }

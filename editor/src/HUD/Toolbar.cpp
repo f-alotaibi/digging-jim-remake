@@ -55,6 +55,23 @@ static void openUrl(const char* path)
 #endif
 }
 
+static bool customEditorPopupOpen()
+{
+    return ImGui::IsPopupOpen("##well_props")
+        || ImGui::IsPopupOpen("##portal_props")
+        || ImGui::IsPopupOpen("##genom_props")
+        || ImGui::IsPopupOpen("##fish_props")
+        || ImGui::IsPopupOpen("##tools_ctx")
+        || ImGui::IsPopupOpen("##caves_list_ctx");
+}
+
+static ImGuiHoveredFlags menuBarHoverFlags()
+{
+    return customEditorPopupOpen()
+        ? ImGuiHoveredFlags_None
+        : ImGuiHoveredFlags_AllowWhenBlockedByPopup;
+}
+
 HUD::Editor::Toolbar::Toolbar(::Editor* editor) : m_editor(editor)
 {
     std::ifstream f("./assets/builder.txt");
@@ -107,7 +124,7 @@ void HUD::Editor::Toolbar::drawMenuBorder(ImVec2 r0, ImVec2 r1, bool pressed)
 void HUD::Editor::Toolbar::drawFileMenu()
 {
     bool open = ImGui::BeginMenu("File");
-    bool hov  = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    bool hov  = ImGui::IsItemHovered(menuBarHoverFlags());
     ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
     if (open)
     {
@@ -122,6 +139,7 @@ void HUD::Editor::Toolbar::drawFileMenu()
         if (ImGui::MenuItem("Settings..."))          m_editor->actionShowSettings();
         ImGui::Separator();
         if (ImGui::MenuItem("Test Level", "Ctrl+T")) m_editor->actionTest();
+        if (ImGui::MenuItem("Simulate", nullptr, m_editor->isSimulating())) m_editor->actionSimulate();
         ImGui::Separator();
         if (ImGui::MenuItem("Exit"))                 m_editor->actionExit();
         ImGui::Unindent(m_menuIndent);
@@ -134,23 +152,28 @@ void HUD::Editor::Toolbar::drawFileMenu()
 void HUD::Editor::Toolbar::drawEditMenu()
 {
     bool open = ImGui::BeginMenu("Edit");
-    bool hov  = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    bool hov  = ImGui::IsItemHovered(menuBarHoverFlags());
     ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
     if (open)
     {
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, m_clrNavy);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,  m_clrNavy);
         ImGui::Indent(m_menuIndent);
-        if (ImGui::MenuItem("Undo", "Ctrl+U")) m_editor->actionUndo();
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_editor->canUndo())) m_editor->actionUndo();
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_editor->canRedo())) m_editor->actionRedo();
         ImGui::Separator();
-        if (ImGui::MenuItem("Copy Level",  "Ctrl+C")) m_editor->actionCopyLevel();
-        if (ImGui::MenuItem("Paste Level", "Ctrl+V")) m_editor->actionPasteLevel();
+        if (ImGui::MenuItem("Copy",  "Ctrl+C")) m_editor->actionCopySelection();
+        if (ImGui::MenuItem("Paste", "Ctrl+V")) m_editor->actionPasteSelection();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Copy Level",  "Ctrl+Shift+C")) m_editor->actionCopyLevel();
+        if (ImGui::MenuItem("Paste Level", "Ctrl+Shift+V")) m_editor->actionPasteLevel();
         if (ImGui::MenuItem("Clear Level", "Ctrl+L")) m_editor->actionClearLevel();
         ImGui::Separator();
         if (ImGui::MenuItem("Insert Level", "Insert")) m_editor->actionInsertLevel();
         if (ImGui::MenuItem("Remove Level", "Delete")) m_editor->actionDeleteLevel();
         ImGui::Separator();
         if (ImGui::MenuItem("Cave Properties...", "Ctrl+P")) m_editor->actionShowCaveProperties();
+        if (ImGui::MenuItem("Caves List")) m_editor->actionShowCavesList();
         ImGui::Separator();
         if (ImGui::MenuItem("Random Distribution", "Ctrl+R")) m_editor->actionRandomDist();
         ImGui::Unindent(m_menuIndent);
@@ -163,7 +186,7 @@ void HUD::Editor::Toolbar::drawEditMenu()
 void HUD::Editor::Toolbar::drawViewMenu()
 {
     bool open = ImGui::BeginMenu("View");
-    bool hov  = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    bool hov  = ImGui::IsItemHovered(menuBarHoverFlags());
     ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
     if (open)
     {
@@ -190,7 +213,17 @@ void HUD::Editor::Toolbar::drawToolItems(HUD::Editor::Panel* editorPanel)
     {
         if (ImGui::MenuItem(label, shortcut))
             editorPanel->selectType(px, py);
-        if (type == selType)
+        if (type == selType
+            || (Cave::Entity::isPegul(type) && Cave::Entity::isPegul(selType))
+            || (Cave::Entity::isFusion(type) && Cave::Entity::isFusion(selType))
+            || (Cave::Entity::isPyrozoVariant(type) && Cave::Entity::isPyrozoVariant(selType))
+            || (Cave::Entity::isGodVariant(type) && Cave::Entity::isGodVariant(selType))
+            || (Cave::Entity::isDirtVariant(type) && Cave::Entity::isDirtVariant(selType))
+            || (Cave::Entity::isJimlin(type) && Cave::Entity::isJimlin(selType))
+            || (Cave::Entity::isGateVariant(type) && Cave::Entity::isGateVariant(selType))
+            || (Cave::Entity::isJimlinBlockVariant(type) && Cave::Entity::isJimlinBlockVariant(selType))
+            || (Cave::Entity::isJimlinShipVariant(type) && Cave::Entity::isJimlinShipVariant(selType))
+            || (Cave::Entity::isMossVariant(type) && Cave::Entity::isMossVariant(selType)))
         {
             ImVec2 rmin = ImGui::GetItemRectMin();
             ImVec2 rmax = ImGui::GetItemRectMax();
@@ -202,7 +235,7 @@ void HUD::Editor::Toolbar::drawToolItems(HUD::Editor::Panel* editorPanel)
     };
 
     tool("Space",                    "1", 0, 0, Cave::Entity::Type::Space);
-    tool("Dirt",                     "2", 1, 0, Cave::Entity::Type::Dirt);
+    tool("Dirt",                     "2", HUD::Editor::Panel::DirtSlotX, HUD::Editor::Panel::DirtSlotY, Cave::Entity::Type::Dirt);
     tool("Boulder",                  "3", 2, 0, Cave::Entity::Type::Boulder);
     tool("Diamond",                  "4", 0, 1, Cave::Entity::Type::Diamond);
     tool("Wall",                     "5", 0, 2, Cave::Entity::Type::Wall);
@@ -231,12 +264,81 @@ void HUD::Editor::Toolbar::drawToolItems(HUD::Editor::Panel* editorPanel)
     tool("Granite Ore",              "",  2, 1, Cave::Entity::Type::Ore);
     tool("Start Door",               "",  1, 9, Cave::Entity::Type::StartDoor);
     tool("Exit Door",                "",  2, 9, Cave::Entity::Type::ExitDoor);
+    tool("Gravel",                   "",  0, 10, Cave::Entity::Type::Gravel);
+    tool("Chum",                     "",  1, 10, Cave::Entity::Type::Chum);
+    tool("Magma",                    "",  2, 10, Cave::Entity::Type::Magma);
+    tool("Moss",                     "",  HUD::Editor::Panel::MossSlotX, HUD::Editor::Panel::MossSlotY, Cave::Entity::Type::Moss);
+    tool("Water",                    "",  1, 11, Cave::Entity::Type::Water);
+    tool("Magic Boulder",            "",  2, 11, Cave::Entity::Type::MagicBoulder);
+    tool("Hot Boulder",              "",  0, 12, Cave::Entity::Type::HotBoulder);
+    tool("Mossy Boulder",            "",  1, 12, Cave::Entity::Type::MossyBoulder);
+    tool("Hollow Diamond",           "",  2, 12, Cave::Entity::Type::HollowDiamond);
+    tool("Ruby",                     "",  0, 13, Cave::Entity::Type::Ruby);
+    tool("Pyrobe",                   "",  1, 13, Cave::Entity::Type::Pyrobe);
+    tool("Spinel",                   "",  2, 13, Cave::Entity::Type::Spinel);
+    tool("Hourglass",                "",  0, 14, Cave::Entity::Type::Hourglass);
+    tool("Emerald",                  "",  1, 14, Cave::Entity::Type::Emerald);
+    tool("Lapis",                    "",  2, 14, Cave::Entity::Type::Lapis);
+    tool("Time Bomb",                "",  0, 15, Cave::Entity::Type::TimeBomb);
+    tool("Trap",                     "",  1, 15, Cave::Entity::Type::TrapEmpty);
+    tool("Landmine",                 "",  2, 15, Cave::Entity::Type::Landmine);
+    tool("Lock",                     "",  0, 16, Cave::Entity::Type::Lock);
+    tool("Key",                      "",  1, 16, Cave::Entity::Type::Key);
+    tool("Fan",                      "",  2, 16, Cave::Entity::Type::Fan);
+    tool("Gate",                     "",  HUD::Editor::Panel::GateSlotX, HUD::Editor::Panel::GateSlotY, Cave::Entity::Type::Gate);
+    tool("Jimlin Block",             "",  HUD::Editor::Panel::JimlinBlockSlotX, HUD::Editor::Panel::JimlinBlockSlotY, Cave::Entity::Type::JimlinBlock);
+    tool("Jimlin Ship",              "",  HUD::Editor::Panel::JimlinShipSlotX, HUD::Editor::Panel::JimlinShipSlotY, Cave::Entity::Type::JimlinShipInactive);
+    tool("Well",                     "",  0, 18, Cave::Entity::Type::Well);
+    tool("Portal",                   "",  1, 18, Cave::Entity::Type::Portal);
+    tool("Obsidian Wall",            "",  2, 18, Cave::Entity::Type::ObsidianWall);
+    tool("Lava",                     "",  0, 19, Cave::Entity::Type::Lava);
+    tool("Mole",                     "",  1, 19, Cave::Entity::Type::Mole);
+    tool("Spinner",                  "",  2, 19, Cave::Entity::Type::Spinner);
+    tool("Blob",                     "",  0, 20, Cave::Entity::Type::Blob);
+    tool("Sludg",                    "",  1, 20, Cave::Entity::Type::Sludg);
+    tool("Pegul",                    "",  HUD::Editor::Panel::PegulSlotX, HUD::Editor::Panel::PegulSlotY, Cave::Entity::Type::PegulNormo);
+    tool("Boulder Eater",            "",  0, 21, Cave::Entity::Type::BoulderEater);
+    tool("Pyram",                    "",  1, 21, Cave::Entity::Type::Pyram);
+    tool("Creep",                    "",  2, 21, Cave::Entity::Type::Creep);
+    tool("Gallop Egg",               "",  0, 22, Cave::Entity::Type::GallopEgg);
+    tool("Gallop",                   "",  1, 22, Cave::Entity::Type::Gallop);
+    tool("Gallop Queen",             "",  2, 22, Cave::Entity::Type::GallopQueen);
+    tool("Tetrapus",                 "",  0, 23, Cave::Entity::Type::Tetrapus);
+    tool("Glutton",                  "",  1, 23, Cave::Entity::Type::Glutton);
+    tool("Binocule",                 "",  2, 23, Cave::Entity::Type::Binocule);
+    tool("Fusion",                   "",  HUD::Editor::Panel::FusionSlotX, HUD::Editor::Panel::FusionSlotY, Cave::Entity::Type::Fusion1);
+    tool("Puffer",                   "",  1, 24, Cave::Entity::Type::Puffer);
+    tool("Charger",                  "",  2, 24, Cave::Entity::Type::Charger);
+    tool("Pyrozo",                   "",  HUD::Editor::Panel::PyrozoSlotX, HUD::Editor::Panel::PyrozoSlotY, Cave::Entity::Type::Pyrozo);
+    tool("Hellgull",                 "",  1, 25, Cave::Entity::Type::Hellgull);
+    tool("Charia",                   "",  2, 25, Cave::Entity::Type::Charia);
+    tool("Worm",                     "",  0, 26, Cave::Entity::Type::Worm);
+    tool("Plankton",                 "",  1, 26, Cave::Entity::Type::Plankton);
+    tool("Predator",                 "",  2, 26, Cave::Entity::Type::Predator);
+    tool("Macow Egg",                "",  0, 27, Cave::Entity::Type::MacowEgg);
+    tool("Macow",                    "",  1, 27, Cave::Entity::Type::Macow);
+    tool("Jelly",                    "",  2, 27, Cave::Entity::Type::Jelly);
+    tool("Caterpillar",              "",  0, 28, Cave::Entity::Type::Caterpillar);
+    tool("Butterfly",                "",  1, 28, Cave::Entity::Type::Butterfly);
+    tool("Mimic",                    "",  2, 28, Cave::Entity::Type::Mimic);
+    tool("Shade",                    "",  0, 29, Cave::Entity::Type::Shade);
+    tool("Grouper",                  "",  1, 29, Cave::Entity::Type::Grouper);
+    tool("Genom",                    "",  HUD::Editor::Panel::GenomSlotX, HUD::Editor::Panel::GenomSlotY, Cave::Entity::Type::Genom);
+    tool("Compressor",               "",  0, 30, Cave::Entity::Type::Compressor);
+    tool("Hive Matriarch",           "",  HUD::Editor::Panel::HiveMatriarchSlotX, HUD::Editor::Panel::HiveMatriarchSlotY, Cave::Entity::Type::HiveMatriarch);
+    tool("Hive Wall",                "",  HUD::Editor::Panel::HiveWallSlotX, HUD::Editor::Panel::HiveWallSlotY, Cave::Entity::Type::HiveWall);
+    tool("Fish",                     "",  HUD::Editor::Panel::FishSlotX, HUD::Editor::Panel::FishSlotY, Cave::Entity::Type::Fish);
+    tool("Coral",                    "",  1, 31, Cave::Entity::Type::Coral);
+    tool("Parasite",                 "",  2, 31, Cave::Entity::Type::Parasite);
+    tool("Agent",                    "",  HUD::Editor::Panel::AgentSlotX, HUD::Editor::Panel::AgentSlotY, Cave::Entity::Type::Agent);
+    tool("God",                      "",  HUD::Editor::Panel::GodSlotX, HUD::Editor::Panel::GodSlotY, Cave::Entity::Type::God);
+    tool("Jimlin",                   "",  HUD::Editor::Panel::JimlinSlotX, HUD::Editor::Panel::JimlinSlotY, Cave::Entity::Type::Jimlin1);
 }
 
 void HUD::Editor::Toolbar::drawToolsMenu(HUD::Editor::Panel* editorPanel)
 {
     bool open = ImGui::BeginMenu("Tools");
-    bool hov  = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    bool hov  = ImGui::IsItemHovered(menuBarHoverFlags());
     ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
     if (open)
     {
@@ -268,7 +370,7 @@ void HUD::Editor::Toolbar::drawToolsContextPopup(HUD::Editor::Panel* editorPanel
 void HUD::Editor::Toolbar::drawHelpMenu()
 {
     bool open = ImGui::BeginMenu("Help");
-    bool hov  = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    bool hov  = ImGui::IsItemHovered(menuBarHoverFlags());
     ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
     if (open)
     {

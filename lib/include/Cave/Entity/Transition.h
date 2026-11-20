@@ -80,12 +80,18 @@ namespace Cave::Entity {
 	  */
 	struct Transition {
 
-		Transition(TransitionType type, Animation animation) : m_type(type), m_animation(animation) {};
+		Transition(TransitionType type, Animation animation, int inc = 4)
+			: m_animation(animation), m_type(type), m_inc(inc > 0 ? inc : 4), m_displacement(m_inc) {};
 
 		/// @brief Get the transition type.
 		/// @return TransitionType the transition type.
-		TransitionType getType() {
+		TransitionType getType() const {
 			return m_type;
+		}
+
+		/// @brief Previous entity animation drawn during this transition.
+		Animation getAnimation() const {
+			return m_animation;
 		}
 
 		/// @brief Is the transition from a current entity.
@@ -136,12 +142,59 @@ namespace Cave::Entity {
 		void updateDisplacement() {
 			if (m_displacement < 32) {
 				m_displacement += m_inc;
+				if (m_displacement > 32) {
+					m_displacement = 32;
+				}
 			}
 		}
 
 		/// @brief Whether this transition is finished.
-		bool isFinished() {
+		bool isFinished() const {
 			return (m_displacement >= 32);
+		}
+
+		/// @brief Pixel displacement of the slide (0-32).
+		int getDisplacement() const {
+			return m_displacement;
+		}
+
+		/// @brief Grid direction this slide travels.
+		Cave::Entity::Direction getMoveDirection() const {
+			switch (m_type) {
+			case TransitionType::MOVE_LEFT_AWAY:
+			case TransitionType::MOVE_LEFT_INTO:
+			case TransitionType::MOVE_LEFT_PUSH:
+				return Cave::Entity::Direction::LEFT;
+			case TransitionType::MOVE_RIGHT_AWAY:
+			case TransitionType::MOVE_RIGHT_INTO:
+			case TransitionType::MOVE_RIGHT_PUSH:
+				return Cave::Entity::Direction::RIGHT;
+			case TransitionType::MOVE_UP_AWAY:
+			case TransitionType::MOVE_UP_INTO:
+			case TransitionType::MOVE_UP_PUSH:
+				return Cave::Entity::Direction::UP;
+			case TransitionType::MOVE_DOWN_AWAY:
+			case TransitionType::MOVE_DOWN_INTO:
+			case TransitionType::MOVE_DOWN_PUSH:
+				return Cave::Entity::Direction::DOWN;
+			default:
+				return Cave::Entity::Direction::NO_DIRECTION;
+			}
+		}
+
+		/// @brief Pixel step per frame. 8 finishes a tile in half a tick.
+		void setDisplacementIncrement(int inc) {
+			m_inc = inc;
+			if (m_displacement < m_inc) {
+				m_displacement = m_inc;
+			}
+		}
+
+		/// @brief Snap slide progress (0-32) to match another entity's transition.
+		void setDisplacement(int displacement) {
+			if (displacement < 0) displacement = 0;
+			if (displacement > 32) displacement = 32;
+			m_displacement = displacement;
 		}
 
 		/// @brief Retrieves the current animation texture index.

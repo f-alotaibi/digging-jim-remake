@@ -1,17 +1,50 @@
 #include "Cave/Map/Map.h"
+#include <algorithm>
+
+bool Cave::Map::isOpenForFall(const int& index) const {
+	if (!inBounds(index)) return false;
+	return hasTrait(Cave::Entity::Trait::Empty, index)
+		|| getEntityType(index) == Cave::Entity::Type::Fire
+		|| isPassableGate(index);
+}
+
+int Cave::Map::fallableReservingCell(const int& cell) const {
+	if (!inBounds(cell) || !isOpenForFall(cell)) return OUT_OF_BOUNDS_INDEX;
+
+	const int above = getIndex(cell, Cave::Entity::Direction::UP);
+	if (inBounds(above) && isFallableEntity(above)
+		&& getEntityType(above) != Cave::Entity::Type::MagicBoulder) {
+		if (caveEntities[above].fallPending) return OUT_OF_BOUNDS_INDEX;
+		return above;
+	}
+
+	const int below = getIndex(cell, Cave::Entity::Direction::DOWN);
+	if (inBounds(below) && getEntityType(below) == Cave::Entity::Type::MagicBoulder) {
+		if (caveEntities[below].fallPending) return OUT_OF_BOUNDS_INDEX;
+		return below;
+	}
+
+	return OUT_OF_BOUNDS_INDEX;
+}
 
 void Cave::Map::updateFallableEntity(const int& index) {
 	updateEntityAnimation(index);
+	if (editorIdle()) return;
 
-	updateFallableEntityDirection(index);
+	const Cave::Entity::Direction gravity = (getEntityType(index) == Cave::Entity::Type::MagicBoulder)
+		? Cave::Entity::Direction::UP
+		: Cave::Entity::Direction::DOWN;
 
-	int below = getIndex(index, Cave::Entity::Direction::DOWN);
-	if (handleEntityFalling(index, below)) return;
-	if (handleEntityLanding(index, below)) return;
-	if (handleEntitySlip(index, below)) return;
+	updateFallableEntityDirection(index, gravity);
+
+	int ahead = getIndex(index, gravity);
+	if (handleEntityFalling(index, ahead, gravity)) return;
+	if (tryJimlinBlockTransport(ahead)) return;
+	if (handleEntityLanding(index, ahead)) return;
+	if (handleEntitySlip(index, ahead, gravity)) return;
 }
 
-void Cave::Map::updateFallableEntityDirection(const int& index) {
+void Cave::Map::updateFallableEntityDirection(const int& index, Cave::Entity::Direction gravity) {
 	switch (getEntityDirection(index)) {
 	case Cave::Entity::Direction::LEFT:
 		[[fallthrough]];
@@ -19,152 +52,406 @@ void Cave::Map::updateFallableEntityDirection(const int& index) {
 		setEntityDirection(index, Cave::Entity::Direction::NO_DIRECTION);
 		break;
 	default:
-		setEntityDirection(index, Cave::Entity::Direction::DOWN);
+		setEntityDirection(index, gravity);
 		break;
 	}
 }
 
-bool Cave::Map::handleEntityFalling(const int& index, const int& below) {
-	// Make the entity fall if the below is empty
-	if (hasTrait(Cave::Entity::Trait::Empty, below)) {
-		if (moveEntity(index, Cave::Entity::Direction::DOWN)) {
-			if (!getEntityFalling(below)) {
-				(hasTrait(Cave::Entity::Trait::Collectable, below)) ?
+bool Cave::Map::handleEntityFalling(const int& index, const int& ahead, const Cave::Entity::Direction& gravity) {
+	// Fallables still dropping through this shaft — don't treat them as solid ground
+	// or every stacked / staggered freefall retriggers Drop+Land each cell.
+	auto isAirborneFallable = [this](int cell) {
+		if (!inBounds(cell) || !isFallableEntity(cell)) return false;
+		return getEntityFalling(cell) || caveEntities[cell].airborne
+			|| caveEntities[cell].fallPending;
+	};
+
+	if (isOpenForFall(ahead)) {
+		if (!getEntityFalling(index) && !caveEntities[index].fallPending) {
+			const bool supportDugOrExploded = inBounds(ahead)
+				&& ahead < static_cast<int>(m_supportDugOrExploded.size())
+				&& m_supportDugOrExploded[static_cast<size_t>(ahead)] != 0;
+			if (supportDugOrExploded) {
+				caveEntities[index].fallPending = true;
+				return true;
+			}
+		}
+		const bool wasFalling = getEntityFalling(index) || caveEntities[index].airborne;
+		if (moveEntity(index, gravity)) {
+			if (!wasFalling) {
+				const bool gem = hasTrait(Cave::Entity::Trait::Collectable, ahead)
+					|| Cave::Entity::usesDiamondImpactSound(getEntityType(ahead));
+				gem ?
 					m_game->soundManager.play(Sound::Effect::DiamondDrop) :
 					m_game->soundManager.play(Sound::Effect::Drop);
 			}
-			setEntityFalling(below, true);
+			setEntityFalling(ahead, true);
+			caveEntities[ahead].fallPending = false;
+			caveEntities[ahead].airborne = true;
+			const int below = getIndex(ahead, gravity);
+			const bool delayLand = Cave::Entity::isMagicWall(getEntityType(below))
+				|| (getEntityType(below) == Cave::Entity::Type::JimlinBlock
+					&& Cave::Entity::isDiamondTile(getEntityType(ahead)))
+				|| isAirborneFallable(below);
+			if (!isOpenForFall(below) && !delayLand) {
+				if (handleEntityLanding(ahead, below)) return true;
+				if (handleEntitySlip(ahead, below, gravity)) return true;
+			}
 		}
 		return true;
 	}
 
-	// Entity is current falling (or slipping)
-	if (getEntityTransitioning(index)) {
+	if (caveEntities[index].fallPending) {
+		// Delay expired but the cell is occupied (Jim stepped in after digging, a
+		// monster filled the gap, etc.). Clear the pending flag only — do not invent
+		// a falling/airborne state. Crush requires an actual fall into the cell.
+		caveEntities[index].fallPending = false;
+	}
+
+	if (!caveEntities[index].isFullyInTile()) {
 		return true;
 	}
 
 	return false;
 }
 
-bool Cave::Map::handleEntityLanding(const int& index, const int& below) {
-	// Entity has already landed
+bool Cave::Map::handleEntityLanding(const int& index, const int& ahead) {
 	if (!getEntityFalling(index)) {
 		return false;
 	}
+	if (!isFallableEntity(index)) {
+		setEntityFalling(index, false);
+		caveEntities[index].fallPending = false;
+		caveEntities[index].airborne = false;
+		return false;
+	}
+	if (caveEntities[index].isFullyInTile() && !caveEntities[index].airborne) {
+		setEntityFalling(index, false);
+		caveEntities[index].fallPending = false;
+		return false;
+	}
+
+	// Another fallable still dropping through this cell — keep falling with it.
+	// Settling here cleared falling and spammed Drop/Land every cell in freefall.
+	if (inBounds(ahead) && isFallableEntity(ahead)
+		&& (getEntityFalling(ahead) || caveEntities[ahead].airborne
+			|| caveEntities[ahead].fallPending)) {
+		return true;
+	}
+
+	// Bubbled packages soft-land: they fall and settle but never crush.
+	// Dry fish also soft-land on anything except Jim — sit on top, no kill.
+	// Coral / compressor never crush on impact (Jim, Jimlin, or monsters).
+	const bool bubbledSoft = isHiveBubbled(index);
+	const bool fishSoft = getEntityType(index) == Cave::Entity::Type::Fish
+		&& !Cave::Entity::isPlayer(getEntityType(ahead));
+	const bool coralSoft = getEntityType(index) == Cave::Entity::Type::Coral;
+	const bool compressorSoft = getEntityType(index) == Cave::Entity::Type::Compressor;
+	const bool softLand = bubbledSoft || fishSoft || coralSoft || compressorSoft;
+
+	if (!softLand
+		&& !caveEntities[index].isFullyInTile()
+		&& (hasTrait(Cave::Entity::Trait::Crushable, ahead)
+			|| Cave::Entity::isPlayer(getEntityType(ahead)))) {
+		return true;
+	}
+
+	if (!softLand
+		&& Cave::Entity::isJimlin(getEntityType(ahead)) && tryJimlinDodgeCrush(ahead)) {
+		const Cave::Entity::Direction gravity = (getEntityType(index) == Cave::Entity::Type::MagicBoulder)
+			? Cave::Entity::Direction::UP
+			: Cave::Entity::Direction::DOWN;
+		if (isOpenForFall(ahead) && moveEntity(index, gravity)) {
+			setEntityFalling(ahead, true);
+			caveEntities[ahead].fallPending = false;
+			caveEntities[ahead].airborne = true;
+			return true;
+		}
+	}
+
+	if (!softLand
+		&& (hasTrait(Cave::Entity::Trait::Crushable, ahead)
+			|| Cave::Entity::isPlayer(getEntityType(ahead)))
+		&& !caveEntities[ahead].isFullyInTile()) {
+		return true;
+	}
+
+	const Cave::Entity::Type landingType = getEntityType(index);
+	const Cave::Entity::Type destType = getEntityType(ahead);
+	if ((landingType == Cave::Entity::Type::Bomb
+		|| landingType == Cave::Entity::Type::HotBoulder
+		|| landingType == Cave::Entity::Type::HotBoulderCracked
+		|| landingType == Cave::Entity::Type::FragileDiamond
+		|| destType == Cave::Entity::Type::HotBoulder
+		|| destType == Cave::Entity::Type::HotBoulderCracked
+		|| destType == Cave::Entity::Type::FragileDiamond
+		|| destType == Cave::Entity::Type::Ore)
+		&& !caveEntities[index].isFullyInTile()) {
+		return true;
+	}
+
+	if ((landingType == Cave::Entity::Type::FragileDiamond
+		|| destType == Cave::Entity::Type::FragileDiamond)
+		&& inBounds(ahead)
+		&& (getEntityFalling(ahead) || caveEntities[ahead].airborne)) {
+		return true;
+	}
+
+	// Full trap: wait until the fall slide finishes, then crush like any fallable, then pop.
+	if (landingType == Cave::Entity::Type::TrapFull
+		&& !caveEntities[index].isFullyInTile()) {
+		return true;
+	}
+
 	setEntityFalling(index, false);
+	caveEntities[index].fallPending = false;
+	caveEntities[index].airborne = false;
 
 	Cave::Entity::Type type = getEntityType(index);
 
-	// If landing entity is a bomb, create an explosion
+	// Full trap on compressor: open/release and eat — do not crush the compressor.
+	if (type == Cave::Entity::Type::TrapFull
+		&& getEntityType(ahead) == Cave::Entity::Type::Compressor) {
+		beginCompressorEat(ahead, index);
+		return true;
+	}
+
 	if (type == Cave::Entity::Type::Bomb) {
 		createExplosion(index);
 		return true;
 	}
 
-	// If the entity below is crushable, create an explosion
-	if (hasTrait(Cave::Entity::Trait::Crushable, below)) {
-		createExplosion(below);
+	// Magic wall before hot-boulder crack/explode so hot rocks can convert.
+	{
+		const Cave::Entity::Type aheadTypeMw = getEntityType(ahead);
+		const Cave::Entity::Direction gravityMw = (type == Cave::Entity::Type::MagicBoulder)
+			? Cave::Entity::Direction::UP
+			: Cave::Entity::Direction::DOWN;
+		if (handleEntityLandingOnMagicWall(index, type, ahead, aheadTypeMw, gravityMw)) {
+			return true;
+		}
+	}
+
+	if (type == Cave::Entity::Type::HotBoulderCracked) {
+		createExplosion(index);
+		return true;
+	}
+	if (getEntityType(ahead) == Cave::Entity::Type::HotBoulderCracked) {
+		createExplosion(ahead);
 		return true;
 	}
 
-	Cave::Entity::Type belowType = getEntityType(below);
+	auto crackHotBoulder = [this](int cell) {
+		int variant = 0;
+		const auto& anim = caveEntities[cell].animation();
+		if (!anim.frames.empty()) {
+			int frame = anim.currentFrame;
+			if (frame < 0 || frame >= static_cast<int>(anim.frames.size()))
+				frame = 0;
+			variant = std::clamp(anim.frames[static_cast<size_t>(frame)] - Cave::Entity::HotBoulder::FRAME_BASE, 0, 3);
+		}
+		caveEntities[cell] = Cave::Entity::HotBoulderCracked(variant);
+		caveEntities[cell].clearTransition();
+	};
 
-	// If the landing entity is a boulder and entity below is an ore, transform the ore
-	if (type == Cave::Entity::Type::Boulder && belowType == Cave::Entity::Type::Ore) {
-		setEntity(below, Cave::Entity::OreTransformation());
+	if (getEntityType(ahead) == Cave::Entity::Type::HotBoulder)
+		crackHotBoulder(ahead);
+
+	if (hasTrait(Cave::Entity::Trait::Crushable, ahead)) {
+		// Bubbled hive packages / dry fish settle without crushing whatever they land on.
+		if (softLand) {
+			m_game->soundManager.play(Sound::Effect::Land);
+			return false;
+		}
+		// Compressors stack: falling onto another compressor does not crush it.
+		if (type == Cave::Entity::Type::Compressor
+			&& getEntityType(ahead) == Cave::Entity::Type::Compressor) {
+			m_game->soundManager.play(Sound::Effect::Land);
+			notifyFusion5Stimulus(index);
+			return false;
+		}
+		if (getEntityType(ahead) == Cave::Entity::Type::Chaos) {
+			chaosHitByFallable(ahead);
+			return true;
+		}
+		const bool aheadIsJim = getEntityType(ahead) == Cave::Entity::Type::Jim;
+		if (aheadIsJim && (isJimInvincible(ahead) || jimSteppedIntoCellThisTick(ahead))) {
+			hasTrait(Cave::Entity::Trait::Collectable, index)
+				|| Cave::Entity::usesDiamondImpactSound(type) ?
+				m_game->soundManager.play(Sound::Effect::DiamondLand) :
+				m_game->soundManager.play(Sound::Effect::Land);
+			notifyFusion5Stimulus(index);
+			return false;
+		}
+		if (Cave::Entity::isJimlin(getEntityType(ahead))
+			&& (getEntityTransitioning(ahead) || jimlinSteppedIntoCellThisTick(ahead))) {
+			hasTrait(Cave::Entity::Trait::Collectable, index)
+				|| Cave::Entity::usesDiamondImpactSound(type) ?
+				m_game->soundManager.play(Sound::Effect::DiamondLand) :
+				m_game->soundManager.play(Sound::Effect::Land);
+			notifyFusion5Stimulus(index);
+			return false;
+		}
+		int blast = ahead;
+		if (getEntityType(ahead) == Cave::Entity::Type::PufferBody) {
+			const int center = caveEntities[ahead].targetIndex;
+			if (inBounds(center) && getEntityType(center) == Cave::Entity::Type::Puffer)
+				blast = center;
+		}
+		if (Cave::Entity::isPegul(getEntityType(blast)))
+			m_pegulFuseHunt = true;
+		createExplosion(blast);
+		if (type == Cave::Entity::Type::TrapFull)
+			releaseTrapMonster(index);
+		return true;
+	}
+
+	if (type == Cave::Entity::Type::TrapFull) {
+		releaseTrapMonster(index);
+		return true;
+	}
+
+	Cave::Entity::Type aheadType = getEntityType(ahead);
+
+	if ((Cave::Entity::isBoulder(type) || type == Cave::Entity::Type::MagicBoulder
+		|| type == Cave::Entity::Type::HotBoulder || type == Cave::Entity::Type::HotBoulderCracked
+		|| type == Cave::Entity::Type::GallopEgg
+		|| Cave::Entity::isMacowEgg(type)
+		|| type == Cave::Entity::Type::Chrysalis)
+		&& aheadType == Cave::Entity::Type::Ore) {
+		setEntity(ahead, Cave::Entity::OreTransformation());
 		m_game->soundManager.play(Sound::Effect::DiamondLand);
 		return false;
 	}
 
-	// If the entity below is a fragile diamond, break it
 	bool landedOnFragileDiamond = false;
-	if (belowType == Cave::Entity::Type::FragileDiamond) {
-		setEntity(below, Cave::Entity::BreakingFragileDiamond());
+	if (aheadType == Cave::Entity::Type::FragileDiamond) {
+		setEntity(ahead, Cave::Entity::BreakingFragileDiamond());
 		m_game->soundManager.play(Sound::Effect::Break);
 		landedOnFragileDiamond = true;
 	}
 
-	// If the entity itself is a fragile diamon, break itself
 	if (type == Cave::Entity::Type::FragileDiamond) {
 		setEntity(index, Cave::Entity::BreakingFragileDiamond());
 		m_game->soundManager.play(Sound::Effect::Break);
 		return true;
 	}
 
-	if (handleEntityLandingOnMagicWall(index, type, below, belowType)) {
+	if (type == Cave::Entity::Type::HotBoulder) {
+		crackHotBoulder(index);
+		m_game->soundManager.play(Sound::Effect::Land);
+		notifyFusion5Stimulus(index);
 		return true;
 	}
 
 	if (!landedOnFragileDiamond) {
-		hasTrait(Cave::Entity::Trait::Collectable, index) ?
+		hasTrait(Cave::Entity::Trait::Collectable, index)
+			|| Cave::Entity::usesDiamondImpactSound(type) ?
 			m_game->soundManager.play(Sound::Effect::DiamondLand) :
 			m_game->soundManager.play(Sound::Effect::Land);
 	}
 
+	notifyFusion5Stimulus(index);
 	return false;
 }
 
-bool Cave::Map::handleEntityLandingOnMagicWall(const int& index, const Cave::Entity::Type& type, const int& below, const Cave::Entity::Type& belowType) {
-	// No interaction with magic wall if entity is not a boulder or diamond
-	if (type != Cave::Entity::Type::Boulder && type != Cave::Entity::Type::Diamond) {
+bool Cave::Map::handleEntityLandingOnMagicWall(const int& index, const Cave::Entity::Type& type, const int& ahead, const Cave::Entity::Type& aheadType, const Cave::Entity::Direction& gravity) {
+	if (!Cave::Entity::isBoulder(type) && type != Cave::Entity::Type::MagicBoulder
+		&& !Cave::Entity::isHotBoulder(type)
+		&& type != Cave::Entity::Type::GallopEgg && !Cave::Entity::isMacowEgg(type)
+		&& type != Cave::Entity::Type::Chrysalis
+		&& type != Cave::Entity::Type::Diamond) {
 		return false;
 	}
 
-	// Used magic wall below will consume boulders and diamonds
-	if (belowType == Cave::Entity::Type::MagicWallUsed) {
+	if (aheadType == Cave::Entity::Type::MagicWallUsed) {
 		setEntity(index, Cave::Entity::Space());
 		return true;
 	}
 
-	// Need magic wall (inactive or active) to exist below
-	if (belowType == Cave::Entity::Type::MagicWallInactive) {
+	Cave::Entity::Type wallType = aheadType;
+	if (wallType == Cave::Entity::Type::MagicWallInactive) {
 		m_magicWallStarted = true;
+		setEntity(ahead, Cave::Entity::MagicWallActive());
+		wallType = Cave::Entity::Type::MagicWallActive;
 	}
-	else if (belowType != Cave::Entity::Type::MagicWallActive) {
+	else if (wallType != Cave::Entity::Type::MagicWallActive) {
 		return false;
 	}
 
-	// Replace landed entity with space
-	setEntity(index, Cave::Entity::Space());
-
-	// Needs to be empty under the magic wall
-	int under = getIndex(below, Cave::Entity::Direction::DOWN);
-	if (!hasTrait(Cave::Entity::Trait::Empty, under)) {
+	const int beyond = getIndex(ahead, gravity);
+	if (getEntityTransitioning(ahead)
+		|| (inBounds(beyond) && getEntityTransitioning(beyond))) {
+		// Wall or exit still mid-slide — keep hovering until it frees.
+		setEntityFalling(index, true);
+		caveEntities[index].airborne = true;
 		return true;
 	}
 
-	// Create opposite entity under magic wall
-	(type == Cave::Entity::Type::Boulder) ? setEntity(under, Cave::Entity::Diamond()) : setEntity(under, Cave::Entity::Boulder());
-	setEntityFalling(under, true);
+	Cave::Entity::Animation incomingAnim = caveEntities[index].getAnimation();
+	setEntity(index, Cave::Entity::Space());
+	// Slide the incoming tile into the wall (don't pop it out of existence).
+	caveEntities[index].applyAwayTransition(gravity, incomingAnim);
+
+	if (!inBounds(beyond) || !hasTrait(Cave::Entity::Trait::Empty, beyond)) {
+		// Dissolve into the wall with an underlay slide.
+		caveEntities[ahead].applyAwayTransition(gravity, incomingAnim);
+		return true;
+	}
+
+	Cave::Entity::Animation spaceAnim = Cave::Entity::Space().getAnimation();
+	if (type == Cave::Entity::Type::Diamond) {
+		setEntity(beyond, Cave::Entity::Boulder());
+	}
+	else {
+		setEntity(beyond, Cave::Entity::Diamond());
+	}
+	// Incoming under the wall (away); transformed result slides out (into).
+	caveEntities[beyond].applyIntoTransition(gravity, spaceAnim);
+	caveEntities[ahead].applyAwayTransition(gravity, incomingAnim);
+	setEntityFalling(beyond, false);
+	caveEntities[beyond].fallPending = true;
+	caveEntities[beyond].airborne = true;
+	setEntityDirection(beyond, gravity);
+	setEntityUpdated(beyond, true);
 
 	return true;
 }
 
-bool Cave::Map::handleEntitySlip(const int& index, const int& below) {
-	// Nothing left to handle if the entity below is not slippery
-	if (!hasTrait(Cave::Entity::Trait::Slippery, below)) {
+bool Cave::Map::handleEntitySlip(const int& index, const int& support, const Cave::Entity::Direction& gravity) {
+	if (getEntityType(support) == Cave::Entity::Type::JimlinBlock
+		&& Cave::Entity::isDiamondTile(getEntityType(index))) {
 		return false;
 	}
 
-	// Falling entity is only able to slip if its direction is down
-	if (getEntityDirection(index) != Cave::Entity::Direction::DOWN) {
+	if (!hasTrait(Cave::Entity::Trait::Slippery, support)) {
 		return false;
 	}
 
-	// Slip entity to the right if empty
-	if (hasTrait(Cave::Entity::Trait::Empty, index, Cave::Entity::Direction::RIGHT) && hasTrait(Cave::Entity::Trait::Empty, below, Cave::Entity::Direction::RIGHT)) {
-		moveEntity(index, Cave::Entity::Direction::RIGHT);
-		setEntityFalling(getIndex(index, Cave::Entity::Direction::RIGHT), true);
-		setEntityDirection(getIndex(index, Cave::Entity::Direction::LEFT), Cave::Entity::Direction::RIGHT);
-		return true;
+	if (getEntityDirection(index) != gravity) {
+		return false;
 	}
 
-	// Else attempt to slip to the left
-	if (hasTrait(Cave::Entity::Trait::Empty, index, Cave::Entity::Direction::LEFT) && hasTrait(Cave::Entity::Trait::Empty, below, Cave::Entity::Direction::LEFT)) {
-		moveEntity(index, Cave::Entity::Direction::LEFT);
-		setEntityFalling(getIndex(index, Cave::Entity::Direction::LEFT), true);
-		setEntityDirection(getIndex(index, Cave::Entity::Direction::LEFT), Cave::Entity::Direction::LEFT);
-		return true;
+	if (isOpenForFall(getIndex(index, Cave::Entity::Direction::RIGHT))
+		&& isOpenForFall(getIndex(support, Cave::Entity::Direction::RIGHT))) {
+		const int dest = getIndex(index, Cave::Entity::Direction::RIGHT);
+		if (moveEntity(index, Cave::Entity::Direction::RIGHT)) {
+			setEntityFalling(dest, true);
+			caveEntities[dest].airborne = true;
+			setEntityDirection(getIndex(dest, Cave::Entity::Direction::LEFT), Cave::Entity::Direction::RIGHT);
+			return true;
+		}
+	}
+
+	if (isOpenForFall(getIndex(index, Cave::Entity::Direction::LEFT))
+		&& isOpenForFall(getIndex(support, Cave::Entity::Direction::LEFT))) {
+		const int dest = getIndex(index, Cave::Entity::Direction::LEFT);
+		if (moveEntity(index, Cave::Entity::Direction::LEFT)) {
+			setEntityFalling(dest, true);
+			caveEntities[dest].airborne = true;
+			setEntityDirection(dest, Cave::Entity::Direction::LEFT);
+			return true;
+		}
 	}
 
 	return false;
@@ -176,4 +463,207 @@ void Cave::Map::updateTNT(const int& index) {
 		return;
 	}
 	updateFallableEntity(index);
+}
+
+void Cave::Map::updateGallopEgg(const int& index) {
+	if (getEntityType(index) != Cave::Entity::Type::GallopEgg) return;
+	if (!getEntityTransitioning(index)) {
+		int& timer = caveEntities[index].spawnCredit;
+		timer++;
+		if (timer >= Cave::Entity::GallopEgg::HATCH_TICKS) {
+			setEntity(index, Cave::Entity::GallopEggPop());
+			m_game->soundManager.play(Sound::Effect::Plasma);
+			return;
+		}
+		caveEntities[index].setAnimation(Cave::Entity::GallopEgg::animationForTimer(timer));
+	}
+	updateFallableEntity(index);
+	if (getEntityType(index) != Cave::Entity::Type::GallopEgg) return;
+	const int timer = caveEntities[index].spawnCredit;
+	const int developStart = Cave::Entity::GallopEgg::STAGE_FETUS_TICKS;
+	const int developEnd = developStart + Cave::Entity::GallopEgg::STAGE_DEVELOP_TICKS;
+	if (timer > developStart && timer <= developEnd) {
+		caveEntities[index].setAnimationFrame(timer - developStart - 1);
+	}
+}
+
+void Cave::Map::updateMacowEgg(const int& index) {
+	if (getEntityType(index) == Cave::Entity::Type::MacowEggCooked) {
+		updateFallableEntity(index);
+		return;
+	}
+	if (getEntityType(index) != Cave::Entity::Type::MacowEgg) return;
+	if (!getEntityTransitioning(index)) {
+		const int below = getIndex(index, Cave::Entity::Direction::DOWN);
+		const bool onMagma = getEntityType(below) == Cave::Entity::Type::Magma;
+		int& hatch = caveEntities[index].spawnCredit;
+		int& cook = caveEntities[index].extra;
+		if (onMagma) {
+			if (cook < Cave::Entity::MacowEgg::COOK_TICKS)
+				cook++;
+			if (cook >= Cave::Entity::MacowEgg::COOK_TICKS) {
+				setEntity(index, Cave::Entity::MacowEggCook());
+				return;
+			}
+			if (hatch < Cave::Entity::MacowEgg::HATCH_TICKS)
+				hatch++;
+			else
+				hatch = Cave::Entity::MacowEgg::HATCH_TICKS;
+		}
+		else {
+			cook = 0;
+			hatch++;
+			if (hatch >= Cave::Entity::MacowEgg::HATCH_TICKS) {
+				setEntity(index, Cave::Entity::MacowEggHatch());
+				m_game->soundManager.play(Sound::Effect::EggHatch);
+				return;
+			}
+		}
+	}
+	updateFallableEntity(index);
+}
+
+void Cave::Map::updateMacowEggCook(const int& index) {
+	if (getEntityType(index) != Cave::Entity::Type::MacowEggCook) return;
+	const int last = Cave::Entity::MacowEggCook::FRAME_COUNT - 1;
+	const int frame = caveEntities[index].getAnimation().currentFrame;
+	if (frame < last) {
+		caveEntities[index].setAnimationFrame(frame + 1);
+		return;
+	}
+	if (restoreCoveredGate(index)) return;
+	setEntity(index, Cave::Entity::MacowEggCooked());
+}
+
+void Cave::Map::updateGenomEgg(const int& index) {
+	if (getEntityType(index) != Cave::Entity::Type::GenomEgg) return;
+	updateFallableEntity(index);
+	if (getEntityType(index) != Cave::Entity::Type::GenomEgg) return;
+	if (getEntityTransitioning(index)) return;
+
+	int& idle = caveEntities[index].extra;
+	if (idle > 0) {
+		idle--;
+		if (idle == 0) {
+			caveEntities[index].setAnimation(
+				Cave::Entity::Animation{ Cave::Entity::GenomEgg::hatchFrames(), 0 });
+			caveEntities[index].setAnimationFrame(0);
+			m_game->soundManager.play(Sound::Effect::EggHatch);
+		}
+		return;
+	}
+
+	caveEntities[index].updateAnimation();
+	if (caveEntities[index].animationLoopCompleted()
+		|| caveEntities[index].getAnimation().currentFrame
+			>= Cave::Entity::GenomEgg::FRAME_COUNT - 1) {
+		const int look = caveEntities[index].spawnCredit;
+		const int behaviour = Cave::Entity::Genom::behaviourPacked(caveEntities[index]);
+		if (restoreCoveredGate(index)) return;
+		setEntity(index, Cave::Entity::Genom());
+		caveEntities[index].spawnCredit = look | Cave::Entity::Genom::LOOK_VALID;
+		Cave::Entity::Genom::setBehaviourPacked(caveEntities[index], behaviour);
+		Cave::Entity::Genom::resetBreed(caveEntities[index]);
+	}
+}
+
+void Cave::Map::updateCaterpillarChrysalize(const int& index) {
+	if (getEntityType(index) != Cave::Entity::Type::CaterpillarChrysalize) return;
+	const int last = Cave::Entity::CaterpillarChrysalize::FRAME_COUNT - 1;
+	const int frame = caveEntities[index].getAnimation().currentFrame;
+	if (frame < last) {
+		caveEntities[index].setAnimationFrame(frame + 1);
+		return;
+	}
+	if (restoreCoveredGate(index)) return;
+	setEntity(index, Cave::Entity::Chrysalis());
+}
+
+void Cave::Map::updateButterflyRelease(const int& index) {
+	if (getEntityType(index) != Cave::Entity::Type::ButterflyRelease) return;
+	const int last = Cave::Entity::ButterflyRelease::FRAME_COUNT - 1;
+	const int frame = caveEntities[index].getAnimation().currentFrame;
+	if (frame < last) {
+		caveEntities[index].setAnimationFrame(frame + 1);
+		return;
+	}
+	if (restoreCoveredGate(index)) return;
+	setEntity(index, Cave::Entity::Butterfly());
+}
+
+void Cave::Map::updateChrysalis(const int& index) {
+	if (getEntityType(index) != Cave::Entity::Type::Chrysalis) return;
+	if (!getEntityTransitioning(index)) {
+		int& timer = caveEntities[index].spawnCredit;
+		if (timer < Cave::Entity::Chrysalis::RELEASE_TICKS)
+			timer++;
+		if (timer >= Cave::Entity::Chrysalis::RELEASE_TICKS) {
+			setEntity(index, Cave::Entity::ButterflyRelease());
+			return;
+		}
+	}
+	updateFallableEntity(index);
+}
+
+void Cave::Map::updateJimlinBlock(const int& index) {
+	const bool active = jimlinBlockAvailable(index);
+	const Cave::Entity::Animation anim = caveEntities[index].getAnimation();
+	const int want = active
+		? Cave::Entity::JimlinBlock::FRAME_BASE
+		: Cave::Entity::JimlinBlock::FRAME_BASE_INACTIVE;
+	if (anim.frames.empty() || anim.frames[0] != want) {
+		if (active) {
+			const int frame = anim.currentFrame;
+			setEntityAnimation(index, Cave::Entity::JimlinBlock::activeAnimation());
+			caveEntities[index].setAnimationFrame(frame % Cave::Entity::JimlinBlock::FRAME_COUNT);
+		}
+		else {
+			setEntityAnimation(index, Cave::Entity::JimlinBlock::inactiveAnimation());
+		}
+	}
+	updateEntityAnimation(index);
+	if (editorIdle()) return;
+	if (active)
+		tryJimlinBlockTransport(index);
+}
+
+bool Cave::Map::tryJimlinBlockTransport(const int& block) {
+	if (editorIdle()) return false;
+	if (!jimlinBlockAvailable(block))
+		return false;
+	if (getEntityTransitioning(block))
+		return false;
+
+	const int above = getIndex(block, Cave::Entity::Direction::UP);
+	if (!inBounds(above) || !Cave::Entity::isDiamondTile(getEntityType(above)))
+		return false;
+	if (getEntityTransitioning(above)) return false;
+
+	const int dest = getIndex(block, Cave::Entity::Direction::DOWN);
+	if (dest == OUT_OF_BOUNDS_INDEX || getEntityTransitioning(dest))
+		return false;
+	if (!hasTrait(Cave::Entity::Trait::Empty, dest))
+		return false;
+
+	const Cave::Entity::Type type = getEntityType(above);
+	Cave::Entity::Animation diamondAnim = caveEntities[above].getAnimation();
+	Cave::Entity::Animation spaceAnim = Cave::Entity::Space().getAnimation();
+	setEntity(above, Cave::Entity::Space());
+	// Slide the diamond into the block (don't pop it out of existence).
+	caveEntities[above].applyAwayTransition(Cave::Entity::Direction::DOWN, diamondAnim, 4);
+	if (type == Cave::Entity::Type::FragileDiamond)
+		setEntity(dest, Cave::Entity::FragileDiamond());
+	else if (type == Cave::Entity::Type::HollowDiamond)
+		setEntity(dest, Cave::Entity::HollowDiamond());
+	else
+		setEntity(dest, Cave::Entity::Diamond());
+	// Diamond slides into/through the block underlaid, then into the cell below.
+	caveEntities[dest].applyIntoTransition(Cave::Entity::Direction::DOWN, spaceAnim, 4);
+	caveEntities[block].applyAwayTransition(Cave::Entity::Direction::DOWN, diamondAnim, 4);
+	setEntityFalling(dest, false);
+	caveEntities[dest].fallPending = true;
+	setEntityDirection(dest, Cave::Entity::Direction::DOWN);
+	setEntityUpdated(dest, true);
+	m_game->soundManager.play(Sound::Effect::Tube);
+	return true;
 }

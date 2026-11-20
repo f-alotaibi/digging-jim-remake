@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <optional>
+#include <type_traits>
 #include <vector>
 #include "Cave/Entity/Animation.h"
 #include "Cave/Entity/Facing.h"
@@ -55,6 +56,12 @@ namespace Cave::Entity {
         /// @brief Add a trait to the entity (e.g., pushable, crushable).
         void addTrait(Trait trait) { m_traits |= trait; }
 
+        /// @brief Remove a trait from the entity.
+        void removeTrait(Trait trait) {
+            using U = std::underlying_type_t<Trait>;
+            m_traits = static_cast<Trait>(static_cast<U>(m_traits) & ~static_cast<U>(trait));
+        }
+
         /**
          * @brief Check if the entity has a specific trait.
          * @param trait The trait to check.
@@ -68,6 +75,9 @@ namespace Cave::Entity {
 
         /// @brief Get the current animation for the entity.
         Animation getAnimation() const { return m_animation; }
+
+        /// @brief Current animation without copying the frame list.
+        const Animation& animation() const { return m_animation; }
 
         /**
          * @brief Replace the entity's animation.
@@ -85,6 +95,18 @@ namespace Cave::Entity {
             if (m_transition) {
                 m_transition->updateAnimation();
             }
+        }
+
+        /// @brief Play the current animation forwards or backwards.
+        void setAnimationReverse(bool playReverse) {
+            m_animation.reverse = playReverse;
+        }
+
+        /// @brief Jump to a frame in the current animation without replacing it.
+        void setAnimationFrame(int frame) {
+            if (m_animation.frames.empty()) return;
+            const int count = static_cast<int>(m_animation.frames.size());
+            m_animation.currentFrame = ((frame % count) + count) % count;
         }
 
         /// @brief Check if the animation has looped at least once.
@@ -107,12 +129,12 @@ namespace Cave::Entity {
          * @param direction Direction of movement.
          * @param animation Animation to apply during transition.
          */
-        void applyAwayTransition(const Cave::Entity::Direction& direction, Animation& animation) {
+        void applyAwayTransition(const Cave::Entity::Direction& direction, Animation& animation, int slideInc = 4) {
             if (direction == Cave::Entity::Direction::NO_DIRECTION) {
                 return;
             }
             int i = static_cast<int>(direction);
-            m_transition = Transition(awayTransitions[i], animation);
+            m_transition = Transition(awayTransitions[i], animation, slideInc);
         }
 
         /**
@@ -120,12 +142,12 @@ namespace Cave::Entity {
          * @param direction Direction of movement.
          * @param animation Animation to apply during transition.
          */
-        void applyPushTransition(const Cave::Entity::Direction& direction, Animation& animation) {
+        void applyPushTransition(const Cave::Entity::Direction& direction, Animation& animation, int slideInc = 4) {
             if (direction == Cave::Entity::Direction::NO_DIRECTION) {
                 return;
             }
             int i = static_cast<int>(direction);
-            m_transition = Transition(pushTransitions[i], animation);
+            m_transition = Transition(pushTransitions[i], animation, slideInc);
         }
 
         /**
@@ -133,12 +155,12 @@ namespace Cave::Entity {
          * @param direction Direction of movement.
          * @param animation Animation to apply during transition.
          */
-        void applyIntoTransition(const Cave::Entity::Direction& direction, Animation& animation) {
+        void applyIntoTransition(const Cave::Entity::Direction& direction, Animation& animation, int slideInc = 4) {
             if (direction == Cave::Entity::Direction::NO_DIRECTION) {
                 return;
             }
             int i = static_cast<int>(direction);
-            m_transition = Transition(intoTransitions[i], animation);
+            m_transition = Transition(intoTransitions[i], animation, slideInc);
         }
 
         /**
@@ -161,6 +183,27 @@ namespace Cave::Entity {
                 return;
             }
             entity.m_transition = std::move(m_transition);
+        }
+
+        /// @brief Speed or slow the current slide without changing how it is drawn.
+        void setTransitionDisplacementIncrement(int inc) {
+            if (!m_transition) {
+                return;
+            }
+            m_transition->setDisplacementIncrement(inc);
+        }
+
+        /// @brief Snap slide progress to match another entity (e.g. bubble over prey).
+        void setTransitionDisplacement(int displacement) {
+            if (!m_transition) {
+                return;
+            }
+            m_transition->setDisplacement(displacement);
+        }
+
+        /// @brief Drop any in-progress slide so the entity draws fully in its tile.
+        void clearTransition() {
+            m_transition = std::nullopt;
         }
 
         /// @brief Terminate the current transition unless it is an "away" transition.
@@ -211,6 +254,44 @@ namespace Cave::Entity {
         /// @brief Check if the entity is currently in transition.
         bool isTransitioning() const {
             return m_transition.has_value();
+        }
+
+        /// @brief True when this tile is sliding into its cell.
+        bool isIntoTransition() const {
+            return m_transition && m_transition->isInto();
+        }
+
+        /// @brief True when this tile is vacating via an away slide.
+        bool isAwayTransition() const {
+            return m_transition && m_transition->isAway();
+        }
+
+        /// @brief True when this tile is the middle cell of a push slide.
+        bool isPushTransition() const {
+            return m_transition && m_transition->isPush();
+        }
+
+        /// @brief Pixel displacement of the current slide (0-32).
+        int getTransitionDisplacement() const {
+            return m_transition ? m_transition->getDisplacement() : 32;
+        }
+
+        /// @brief Grid direction of the current slide.
+        Direction getTransitionDirection() const {
+            return m_transition ? m_transition->getMoveDirection() : Direction::NO_DIRECTION;
+        }
+
+        /// @brief True when the entity draws fully in its cell (no slide, or slide complete).
+        bool isFullyInTile() const {
+            return !m_transition || m_transition->isFinished();
+        }
+
+        /// @brief Copy the away-slide animation if this tile is vacating in `direction`.
+        std::optional<Animation> copyAwayAnimation(const Direction& direction) const {
+            if (!m_transition || direction == Direction::NO_DIRECTION) return std::nullopt;
+            if (m_transition->getType() != awayTransitions[static_cast<int>(direction)])
+                return std::nullopt;
+            return m_transition->getAnimation();
         }
 
         // ---------------------------------------------------------------------
@@ -280,6 +361,13 @@ namespace Cave::Entity {
         /// @brief Flag to be used if the entity is falling
         bool falling = false;
 
+        /// @brief One-tick delay after losing support before a fall actually starts.
+        bool fallPending = false;
+
+        /// @brief True only after an actual gravity/slip move this drop. Prevents
+        /// standstill crush/explode while resting on another fallable.
+        bool airborne = false;
+
         /// @brief Flag to be used if the entity is currently moving.
         bool moving = false;
 
@@ -294,6 +382,27 @@ namespace Cave::Entity {
 
         /// @brief Last movement direction.
         Cave::Entity::Direction direction = Cave::Entity::Direction::NO_DIRECTION;
+
+        /// @brief Locked pathfinding target cell, or -1 if none.
+        int targetIndex = -1;
+
+        /// @brief Extra per-entity counter (Well spawn credit, unused elsewhere).
+        int spawnCredit = 0;
+
+        /// @brief Extra per-entity payload (Chaos craze option and counters).
+        int extra = 0;
+
+        /// @brief Spawn cell a Jimlin returns to after a duty cycle, or -1.
+        int homeIndex = -1;
+
+        /// @brief Ticks a Jimlin has been active since last rest.
+        int dutyTicks = 0;
+
+        /// @brief Consecutive ticks a hive member has been immobilized with no escape.
+        int stuckTicks = 0;
+
+        /// @brief Sticky hive overflow assignment — parks in living rooms until actives need them.
+        bool hiveLivingExtra = false;
 
     protected:
 

@@ -51,19 +51,41 @@ vec3 hsl2rgb(vec3 c) {
     return rgb + vec3(m);
 }
 
-void main()
-{
-    vec4 pixel = texture2D(texture, gl_TexCoord[0].xy);
-    vec3 hsl = rgb2hsl(pixel.rgb);
+vec3 applyCaveFilter(vec3 rgb) {
+    vec3 hsl = rgb2hsl(rgb);
 
     float hueLinear = mod(2.0 / 3.0 - hsl.x + 1.0, 1.0) * tint.x * 2.0;
     float lumLinear = hsl.z + (1.0 - hsl.z + hsl.y) * (tint.z - 0.5) / 3.0;
     float lumLimit = hsl.z + (1.0 - hsl.z) * (1.0 - hsl.y) * tint.z * 1.0 / 3.0;
-    
+
     hsl.x = mod(2.0 / 3.0 - min(hueLinear, 1.0) + 1.0, 1.0);
     hsl.y = min(hsl.y * tint.y * 2.0, 1.0);
     hsl.z = min(max(lumLinear, 0.0), lumLimit);
 
-    vec3 finalColor = hsl2rgb(hsl);
-    gl_FragColor = vec4(finalColor, pixel.a);
+    return hsl2rgb(hsl);
+}
+
+void main()
+{
+    vec4 texColor = texture2D(texture, gl_TexCoord[0].xy);
+    vec3 src = texColor.rgb;
+
+    // Vertex colour first (Fish / Genom hue layers, Jim buffs), then cave filter
+    // so coloured layers still shift with the level tint. Greyscale sprites with
+    // white multiply are unchanged: filter(tex) == filter(tex * 1).
+    vec3 coloured = src * gl_Color.rgb;
+
+    // Alpha < 0.5 (Fish spriteTint / Genom wings-eyes-mouth): protect light pixels
+    // from the multiply tint before the cave filter runs.
+    if (gl_Color.a < 0.5) {
+        float lum = max(src.r, max(src.g, src.b));
+        float tintAmt = 1.0 - smoothstep(0.55, 0.92, lum);
+        coloured = mix(src, coloured, tintAmt);
+    }
+
+    // Jim pyrobe / ruby buff used alpha in (0, 0.5) historically; keep multiply
+    // semantics for that band (already applied above) then cave-filter the result.
+    vec3 outc = applyCaveFilter(coloured);
+
+    gl_FragColor = vec4(outc, texColor.a);
 }

@@ -20,6 +20,8 @@ namespace Input {
         Confirm,
         /// @brief Whilst held, Jim will be in collect mode.
         Collect,
+        /// @brief Toggle the in-cave inventory slide-out menu.
+        ToggleInventory,
         /// @brief Pause the game.
         Pause,
         /// @brief Trigger Jim self-destruction.
@@ -29,6 +31,8 @@ namespace Input {
 
         /// @brief Activate cheat mode.
         ActivateCheatMode,
+        /// @brief Toggle free camera while cheat mode is active.
+        ToggleFreeCamera,
         /// @brief Restart the current cave.
         RestartCave,
         /// @brief Advance to the next cave.
@@ -77,6 +81,22 @@ namespace Input {
         void handleEvent(const sf::Event& event);
 
         /**
+         * @brief Sync keyboard hold/press from hardware key state.
+         *
+         * SFML key events stop when the window loses focus (toasts, overlays).
+         * Polling keeps controls working unless @p acceptInput is false (real app switch).
+         */
+        void syncKeyboard(bool acceptInput);
+
+        /**
+         * @brief Ignore Tab self-destruct until Tab is physically released.
+         *
+         * Alt+Tab delivers a Tab key to the game; this swallows that press
+         * and any leftover Tab when focus returns.
+         */
+        void suppressSelfDestructUntilTabReleased();
+
+        /**
          * @brief Handle joystick input for movement and actions.
          *
          * Polls the given joystick for axis movement and button presses.
@@ -117,6 +137,19 @@ namespace Input {
         bool wasPressed(Input::Action action) const;
 
         /**
+         * @brief Held now, or tapped since the last cave tick.
+         *
+         * Lets a light tap count on the next Jim step without making that
+         * direction keep repeating after the key is released.
+         */
+        bool gameplayHeld(Input::Action action) const;
+
+        /**
+         * @brief Clear tap buffers after a cave tick has applied them.
+         */
+        void consumeGameplayLatch();
+
+        /**
          * @brief Increase the push timer counter.
          *
          * Called when Jim attempts to push an object, tracking the number
@@ -127,12 +160,13 @@ namespace Input {
         /**
          * @brief Check if the current push duration qualifies as a registered push.
          *
-         * A push is considered registered if the push timer has been active
-         * for at least 8 frames, and occurs on multiples of 8 thereafter.
+         * A push is registered after `interval` consecutive push ticks, then
+         * again on each multiple of `interval`.
          *
+         * @param interval Ticks of hold before the first push, and between repeats.
          * @return true if a push is registered, false otherwise.
          */
-        bool registerPush() const;
+        bool registerPush(unsigned int interval = 8) const;
 
         /**
          * @brief Toggle whether to use joystick controls.
@@ -140,11 +174,18 @@ namespace Input {
         void setJoystick(const bool& toggle);
 
         /**
+         * @brief Ignore WASD for menu navigation so only arrow keys move the cursor.
+         */
+        void setIgnoreWasd(bool ignore);
+
+        /**
          * @brief Get the joystick ID (0 - 7 for SFML).
          */
         void detectJoystick();
 
     private:
+        void latchIfJimAction(Action action);
+
         /// @brief Mapping of keyboard keys to actions.
         std::unordered_map<sf::Keyboard::Scan, Action> m_keyMap = {
             // Developer buttons
@@ -159,6 +200,7 @@ namespace Input {
             {sf::Keyboard::Scan::F9,  Input::Action::CameraRight},
             {sf::Keyboard::Scan::F10, Input::Action::CameraReset},
             {sf::Keyboard::Scan::F11, Input::Action::ActivateCheatMode},
+            {sf::Keyboard::Scan::C,   Input::Action::ToggleFreeCamera},
 
             // Player controls
             {sf::Keyboard::Scan::Up,      Input::Action::MoveUp},
@@ -167,6 +209,7 @@ namespace Input {
             {sf::Keyboard::Scan::Right,   Input::Action::MoveRight},
             {sf::Keyboard::Scan::Enter,   Input::Action::Confirm},
             {sf::Keyboard::Scan::Space,   Input::Action::Collect},
+            {sf::Keyboard::Scan::E,       Input::Action::ToggleInventory},
             {sf::Keyboard::Scan::P,       Input::Action::Pause},
             {sf::Keyboard::Scan::Tab,     Input::Action::SelfDestruct},
             {sf::Keyboard::Scan::Escape,  Input::Action::Quit},
@@ -191,6 +234,9 @@ namespace Input {
         /// @brief Actions that are currently being held down.
         std::set<Input::Action> m_heldActions;
 
+        /// @brief Jim taps that stay active until the next cave tick.
+        std::set<Input::Action> m_latchedActions;
+
         /// @brief Whether a keyboard event occurred before the next update.
         bool m_keyboardEventOccurred = false;
 
@@ -208,6 +254,15 @@ namespace Input {
 
         /// @brief Whether to use JoyStick controls.
         bool m_joystick = false;
+
+        /// @brief When true, W/A/S/D are not treated as movement (menus use arrows only).
+        bool m_ignoreWasd = false;
+
+        /// @brief Drop Tab self-destruct until Tab is released (Alt+Tab / focus return).
+        bool m_blockSelfDestructUntilTabUp = false;
+
+        /// @brief Extra frames to ignore Tab after Alt+Tab / focus change.
+        int m_selfDestructSuppressFrames = 0;
 
         /// @brief ID of the joystick (0 - 7 for SFML).
         int m_joystickId = -1;

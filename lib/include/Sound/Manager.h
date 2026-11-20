@@ -2,6 +2,7 @@
 
 #include <SFML/Audio.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <string>
 #include <memory>
@@ -21,8 +22,12 @@ namespace Sound {
         /// @brief Construct a new Sound Manager instance.
         Manager();
 
-        /// @brief Load all game sound effects into memory.
-        void loadAllSounds();
+        /// @brief Load game sound effects into memory.
+        /// @param includeMusic If false, skip the main-menu music track.
+        void loadAllSounds(bool includeMusic = true);
+
+        /// @brief True after loadAllSounds has loaded effect buffers.
+        bool soundsLoaded() const { return !m_buffers.empty(); }
 
         /**
          * @brief Play a sound effect once.
@@ -32,7 +37,7 @@ namespace Sound {
          *
          * @param effect Enum identifier of the sound effect to play.
          */
-        void play(const Sound::Effect& effect);
+        void play(const Sound::Effect& effect, float pitch = 1.f);
 
         /**
          * @brief Play a sound effect in a continuous loop.
@@ -45,6 +50,12 @@ namespace Sound {
          * @param effect Enum identifier of the sound effect to stop.
          */
         void stop(const Sound::Effect& effect);
+
+        /**
+         * @brief Soft-stop: ramp volume to silence then stop (for cutting one-shots short).
+         * @param durationSeconds Length of the volume ramp.
+         */
+        void fadeOut(const Sound::Effect& effect, float durationSeconds = 0.45f);
 
         /**
          * @brief Check whether a sound effect is currently playing.
@@ -103,6 +114,9 @@ namespace Sound {
         /// @brief List of all currently active (playing) sounds.
         std::vector<std::unique_ptr<sf::Sound>> m_activeSounds;
 
+        /// @brief One-shot effects already started this frame; duplicates are ignored.
+        std::unordered_set<Sound::Effect> m_playedThisFrame;
+
         /// @brief Map of music identifiers to their loaded tracks.
         std::unordered_map<Sound::Music, std::unique_ptr<sf::Music>> m_music;
 
@@ -111,6 +125,17 @@ namespace Sound {
 
         /// @brief Pointer to the currently playing music track, if any.
         sf::Music* m_currentMusic = nullptr;
+
+        struct FadeOutState {
+            float duration = 0.45f;
+            float elapsed = 0.f;
+            float startVolume = 50.f;
+        };
+        std::unordered_map<Sound::Effect, FadeOutState> m_fadeOuts;
+        sf::Clock m_fadeClock;
+        bool m_fadeClockStarted = false;
+
+        void applyVolumeToEffect(const Sound::Effect& effect, float volume);
     };
 
 }

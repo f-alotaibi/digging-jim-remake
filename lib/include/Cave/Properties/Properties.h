@@ -4,6 +4,7 @@
 #include <SFML/Graphics.hpp>
 #include <imgui.h>
 #include <imgui-SFML.h>
+#include "Cave/Entity/Cosmic.h"
 
 static constexpr uint32_t QUOTA_MIN = 0u;
 static constexpr uint32_t QUOTA_MAX = 999u;
@@ -13,14 +14,26 @@ static constexpr uint32_t EXTRA_DIAMOND_VALUE_MIN = 0u;
 static constexpr uint32_t EXTRA_DIAMOND_VALUE_MAX = 99u;
 static constexpr uint32_t AMOEBA_GRWOTH_MAX_MIN = 0u;
 static constexpr uint32_t AMOEBA_GRWOTH_MAX_MAX = 9999u;
+static constexpr uint32_t PLANKTON_GROWTH_MAX_MIN = 0u;
+static constexpr uint32_t PLANKTON_GROWTH_MAX_MAX = 9999u;
+static constexpr uint32_t ROSE_FREQUENCY_MIN = 0u;
+static constexpr uint32_t ROSE_FREQUENCY_MAX = 1000u;
+static constexpr uint32_t GENOM_MUTATIONS_MIN = 0u;
+static constexpr uint32_t GENOM_MUTATIONS_MAX = 1000u;
 static constexpr uint32_t TIME_MIN = 0u;
 static constexpr uint32_t TIME_MAX = 999u;
 static constexpr uint32_t MAGIC_WALL_TIME_MIN = 0u;
 static constexpr uint32_t MAGIC_WALL_TIME_MAX = 999u;
-static constexpr uint32_t AMOEBA_GROWTH_SPEED_MIN = 1u;
+static constexpr uint32_t AMOEBA_GROWTH_SPEED_MIN = 0u;
 static constexpr uint32_t AMOEBA_GROWTH_SPEED_MAX = 1000u;
-static constexpr uint32_t PLASMA_GROWTH_SPEED_MIN = 1u;
+static constexpr uint32_t PLASMA_GROWTH_SPEED_MIN = 0u;
 static constexpr uint32_t PLASMA_GROWTH_SPEED_MAX = 1000u;
+static constexpr uint32_t CHUM_GROWTH_SPEED_MIN = 0u;
+static constexpr uint32_t CHUM_GROWTH_SPEED_MAX = 1000u;
+static constexpr uint32_t LAVA_GROWTH_SPEED_MIN = 0u;
+static constexpr uint32_t LAVA_GROWTH_SPEED_MAX = 1000u;
+static constexpr uint32_t MOSS_GROWTH_SPEED_MIN = 0u;
+static constexpr uint32_t MOSS_GROWTH_SPEED_MAX = 1000u;
 static constexpr uint32_t HUE_MIN = 0u;
 static constexpr uint32_t HUE_MAX = 200u;
 static constexpr uint32_t SAT_MIN = 0u;
@@ -59,6 +72,21 @@ namespace Cave {
         uint32_t hue;
         uint32_t sat;
         uint32_t lum;
+        /// @brief Extra field (not in the 11×uint32 .cav properties blob). Persisted via CHUM chunk.
+        uint32_t chumGrowthSpeed = 0;
+        /// @brief Extra field (not in the 11×uint32 .cav properties blob). CHUM flags bit 0.
+        bool unlimitedTime = false;
+        /// @brief Extra field (not in the 11×uint32 .cav properties blob). Persisted via LAVA chunk.
+        uint32_t lavaGrowthSpeed = 0;
+        /// @brief Extra field (not in the 11×uint32 .cav properties blob). Persisted via PLAN chunk.
+        /// 0 means unlimited plankton splitting.
+        uint32_t planktonGrowthMax = 0;
+        /// @brief Extra field (not in the 11×uint32 .cav properties blob). Persisted via MOSS chunk.
+        uint32_t mossGrowthSpeed = 0;
+        /// @brief Chance per 1000 that a new Moss tile is rose-capable. Default 10 (~1%). Persisted via ROSE chunk.
+        uint32_t roseFrequency = 10;
+        /// @brief Chance per 1000 that a Genom offspring mutates. Default 50 (~5% / 1-in-20). Persisted via GMUT chunk.
+        uint32_t genomMutations = 50;
     };
 
     /**
@@ -75,7 +103,10 @@ namespace Cave {
      * @param diamondCount The current number of diamonds in the cave (used by "Count" button).
      * @param trigger Reference to a flag set to true if the user clicks "OK".
      */
-    void editCaveProperties(sf::RenderWindow& window, Cave::Properties& props, Cave::Properties original, const int& diamondCount, bool& trigger, bool developerMode = false, std::function<void()> onTest = nullptr);
+    void editCaveProperties(sf::RenderWindow& window, Cave::Properties& props, Cave::Properties original, const int& diamondCount, bool& trigger, bool developerMode = false, std::function<void()> onTest = nullptr, bool* editableBorders = nullptr);
+
+    /// @brief Opens a Cosmic Settings dialog for a placed Singularity.
+    void editCosmicSettings(sf::RenderWindow& window, Cave::Entity::Cosmic::Settings& settings, Cave::Entity::Cosmic::Settings original, bool& trigger);
 }
 
 

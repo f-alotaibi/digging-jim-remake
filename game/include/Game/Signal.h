@@ -38,11 +38,23 @@ enum class GameSignal {
     /// @brief Player collected a diamond.
     CollectDiamond,
 
+    /// @brief Player collected a ruby (flat 100 points, no quota).
+    CollectRuby,
+
+    /// @brief Resume play after an emerald soft-respawn (no life loss / load cover).
+    CaveCheckpointResume,
+
     /// @brief Player has paused the game.
     CavePause,
 
     /// @brief Player has unpaused the game.
     CaveUnpause,
+
+    /// @brief Open the ESC quit confirmation menu and pause.
+    OpenQuitConfirm,
+
+    /// @brief Close the ESC quit confirmation menu and resume.
+    CloseQuitConfirm,
 
     /// @brief Player has completed the game!
     GameCompleted,
@@ -51,5 +63,8 @@ enum class GameSignal {
     GotoMainMenu,
 
     /// @brief Exit the game
-    ExitGame
+    ExitGame,
+
+    /// @brief Start a LAN multiplayer session from the menu.
+    PlayMultiplayer
 };

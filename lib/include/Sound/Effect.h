@@ -50,6 +50,24 @@ namespace Sound {
         /// @brief Plasma spawn sound.
         Plasma,
 
+        /// @brief Macow egg hatching.
+        EggHatch,
+
+        /// @brief Chum growth (pitched-down plasma).
+        Chum,
+
+        /// @brief Charger enrage / charge windup.
+        Enrage,
+
+        /// @brief Fusion 1 teleport / Pegul fusion (slowed diamond collect).
+        Haze,
+
+        /// @brief Puffer expanding to 3x3.
+        Inflate,
+
+        /// @brief Puffer shrinking back to 1x1.
+        Deflate,
+
         /// @brief Jim moving through a tube.
         Tube,
 
@@ -60,7 +78,19 @@ namespace Sound {
         Yahoo,
 
         /// @brief Jim completes a cave.
-        Yippee
+        Yippee,
+
+        /// @brief Looping Grouper alarm ambience.
+        Wawa,
+
+        /// @brief Agent starts emitting its aggro wave field.
+        Agent,
+
+        /// @brief Rose growth / plant burst death.
+        Plant,
+
+        /// @brief Underwater explosion / bubble burst.
+        Bubbles
     };
 
 }

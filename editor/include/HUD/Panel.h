@@ -1,6 +1,7 @@
 #pragma once
 #include <map>
 #include <optional>
+#include <string>
 #include <SFML/Graphics.hpp>
 #include "Cave/Entity/Entity.h"
 #include "Cave/Entity/Type.h"
@@ -50,9 +51,191 @@ namespace HUD::Editor {
         /**
          * @brief Select the entity at grid position (x, y) in the entity palette.
          * @param x Column index (0–2).
-         * @param y Row index (0–9).
+         * @param y Row index (0–19).
          */
         void selectType(const int& x, const int& y);
+
+        /// @brief Eyedropper: select the palette tool matching a placed/runtime entity type.
+        void pickEntityType(Cave::Entity::Type type);
+
+        /// Variant palette cells after the door row. Tools menu and dropdowns use these.
+        static constexpr int PegulSlotX = 2, PegulSlotY = 20;
+        static constexpr int FusionSlotX = 0, FusionSlotY = 24;
+        static constexpr int AgentSlotX = 0, AgentSlotY = 32;
+        static constexpr int GodSlotX = 1, GodSlotY = 32;
+        static constexpr int JimlinSlotX = 2, JimlinSlotY = 32;
+        static constexpr int GateSlotX = 0, GateSlotY = 17;
+        static constexpr int JimlinBlockSlotX = 1, JimlinBlockSlotY = 17;
+        static constexpr int JimlinShipSlotX = 2, JimlinShipSlotY = 17;
+        static constexpr int SpaceSlotX = 0, SpaceSlotY = 0;
+        static constexpr int DirtSlotX = 1, DirtSlotY = 0;
+        static constexpr int MossSlotX = 0, MossSlotY = 11;
+        static constexpr int PyrozoSlotX = 0, PyrozoSlotY = 25;
+        static constexpr int GenomSlotX = 2, GenomSlotY = 29;
+        static constexpr int HiveMatriarchSlotX = 1, HiveMatriarchSlotY = 30;
+        static constexpr int HiveWallSlotX = 2, HiveWallSlotY = 30;
+        static constexpr int FishSlotX = 0, FishSlotY = 31;
+
+        /// @brief True if this palette cell is the shared Pegul slot.
+        bool isPegulSlot(const int& x, const int& y) const;
+
+        /// @brief Current Pegul variant painted by the shared palette slot.
+        Cave::Entity::Type getPegulType() const { return m_pegulType; }
+
+        /// @brief Switch the Pegul palette slot to a variant and select it.
+        void setPegulType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Fusion slot.
+        bool isFusionSlot(const int& x, const int& y) const;
+
+        /// @brief Current Fusion variant painted by the shared palette slot.
+        Cave::Entity::Type getFusionType() const { return m_fusionType; }
+
+        /// @brief Switch the Fusion palette slot to a variant and select it.
+        void setFusionType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Pyrozo slot.
+        bool isPyrozoSlot(const int& x, const int& y) const;
+
+        /// @brief Current Pyrozo variant painted by the shared palette slot.
+        Cave::Entity::Type getPyrozoType() const { return m_pyrozoType; }
+
+        /// @brief Switch the Pyrozo palette slot to a variant and select it.
+        void setPyrozoType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared God/Chaos slot.
+        bool isGodSlot(const int& x, const int& y) const;
+
+        /// @brief Current God-slot monster painted by the shared palette cell.
+        Cave::Entity::Type getGodType() const { return m_godType; }
+
+        /// @brief Switch the God palette slot to God or Chaos and select it.
+        void setGodType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the Dirt slot.
+        bool isDirtSlot(const int& x, const int& y) const;
+
+        /// @brief Current Dirt-slot tile (always Dirt).
+        Cave::Entity::Type getDirtType() const { return m_dirtType; }
+
+        /// @brief Select the Dirt palette slot.
+        void setDirtType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Moss/Rose slot.
+        bool isMossSlot(const int& x, const int& y) const;
+
+        /// @brief Current Moss-slot tile painted by the shared palette cell.
+        Cave::Entity::Type getMossType() const { return m_mossType; }
+
+        /// @brief Switch the Moss palette slot to Moss or Rose and select it.
+        void setMossType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Jimlin slot.
+        bool isJimlinSlot(const int& x, const int& y) const;
+
+        /// @brief Current Jimlin variant painted by the shared palette slot.
+        Cave::Entity::Type getJimlinType() const { return m_jimlinType; }
+
+        /// @brief Switch the Jimlin palette slot to a variant and select it.
+        void setJimlinType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Gate/Private Gate slot.
+        bool isGateSlot(const int& x, const int& y) const;
+
+        /// @brief Current gate variant painted by the shared palette slot.
+        Cave::Entity::Type getGateType() const { return m_gateType; }
+
+        /// @brief Switch the Gate palette slot to a variant and select it.
+        void setGateType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Jimlin Block/Vault Button/Dock slot.
+        bool isJimlinBlockSlot(const int& x, const int& y) const;
+
+        /// @brief Current block-slot variant painted by the shared palette cell.
+        Cave::Entity::Type getJimlinBlockType() const { return m_jimlinBlockType; }
+
+        /// @brief Switch the Jimlin Block palette slot to a variant and select it.
+        void setJimlinBlockType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Jimlin Ship/King Ship slot.
+        bool isJimlinShipSlot(const int& x, const int& y) const;
+
+        /// @brief Current ship variant painted by the shared palette slot.
+        Cave::Entity::Type getJimlinShipType() const { return m_jimlinShipType; }
+
+        /// @brief Switch the Jimlin Ship palette slot to a variant and select it.
+        void setJimlinShipType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Space/cosmic slot.
+        bool isSpaceSlot(const int& x, const int& y) const;
+
+        /// @brief Current Space-slot tile painted by the shared palette cell.
+        Cave::Entity::Type getSpaceSlotType() const { return m_spaceSlotType; }
+
+        /// @brief Switch the Space palette slot to empty space or a cosmic.
+        void setSpaceSlotType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the Genom slot.
+        bool isGenomSlot(const int& x, const int& y) const;
+
+        /// @brief True if this palette cell is the Fish slot.
+        bool isFishSlot(const int& x, const int& y) const;
+
+        /// @brief True if this palette cell is the shared Hive Matriarch/Larva slot.
+        bool isHiveMatriarchSlot(const int& x, const int& y) const;
+        Cave::Entity::Type getHiveMatriarchType() const { return m_hiveMatriarchType; }
+        void setHiveMatriarchType(Cave::Entity::Type type);
+
+        /// @brief True if this palette cell is the shared Hive Wall building slot.
+        bool isHiveWallSlot(const int& x, const int& y) const;
+        Cave::Entity::Type getHiveWallType() const { return m_hiveWallType; }
+        void setHiveWallType(Cave::Entity::Type type);
+
+        /// @brief When true, each placed Genom gets a fresh randomLook().
+        bool getGenomRandomize() const { return m_genomRandomize; }
+        void setGenomRandomize(bool randomize);
+
+        /// @brief Packed look used when randomize is off (and shown on the palette icon).
+        int getGenomLook() const { return m_genomLook; }
+        void setGenomLook(int look);
+
+        /// @brief Exclusive movement behaviour for placed Genoms (Genom::MOVE_*).
+        int getGenomMovement() const { return m_genomMove; }
+        void setGenomMovement(int move);
+
+        /// @brief When false, placed Genoms neither breed nor get courted.
+        bool getGenomCanBreed() const { return m_genomCanBreed; }
+        void setGenomCanBreed(bool enabled);
+
+        /// @brief When true, placed Genoms leave diamond explosions on death.
+        bool getGenomDropsDiamonds() const { return m_genomDropsDiamonds; }
+        void setGenomDropsDiamonds(bool enabled);
+
+        /// @brief Current look drawn on the Genom palette cell (custom or random sample).
+        int getGenomPaletteLook() const;
+
+        /// @brief Movement shown in the Genom props popup (custom or random sample).
+        int getGenomPaletteMovement() const;
+
+        /// @brief Breeding flag shown in the Genom props popup (custom or random sample).
+        bool getGenomPaletteCanBreed() const;
+
+        /// @brief Diamond-drop flag shown in the Genom props popup (custom or random sample).
+        bool getGenomPaletteDropsDiamonds() const;
+
+        /// @brief When true, each placed Fish gets a fresh randomLook().
+        bool getFishRandomize() const { return m_fishRandomize; }
+        void setFishRandomize(bool randomize);
+
+        /// @brief Packed look used when randomize is off (and shown on the palette icon).
+        int getFishLook() const { return m_fishLook; }
+        void setFishLook(int look);
+
+        /// @brief Current look drawn on the Fish palette cell (custom or random sample).
+        int getFishPaletteLook() const;
+
+        /// @brief Right-click: if over a variant palette slot, select it and return true.
+        bool handleRightClick(sf::Vector2f vp, float panelX, float toolbarH);
 
         /// @brief Return a fresh instance of the currently selected entity.
         Cave::Entity::Base getSelectedEntity();
@@ -61,8 +244,15 @@ namespace HUD::Editor {
         Cave::Entity::Type getSelectedType() const;
 
         /// @brief Map a palette grid position to the corresponding entity type.
-        /// @param x Column (0–2). @param y Row (0–9).
-        Cave::Entity::Type getType(const int& x, const int& y);
+        /// @param x Column (0–2). @param y Row (0–19).
+        Cave::Entity::Type getType(const int& x, const int& y) const;
+
+        /// @brief Display name for a palette cell (current variant for multi-type slots).
+        std::string getPaletteSlotName(const int& x, const int& y) const;
+
+        /// @brief Hit-test a virtual-screen point against a filled palette cell.
+        bool getPaletteSlotAt(sf::Vector2f vp, float panelX, float toolbarH,
+            int& outX, int& outY) const;
 
         /// @brief Construct a fresh entity instance for the given type.
         Cave::Entity::Base getNewEntity(Cave::Entity::Type type);
@@ -93,7 +283,18 @@ namespace HUD::Editor {
          */
         void handleClick(sf::Vector2f vp, float panelX, float toolbarH);
 
-        /// @brief Handle a left mouse button release (resets the test button state).
+        /**
+         * @brief Drag the palette scrollbar thumb, if it is currently held.
+         */
+        void handleDrag(sf::Vector2f vp, float panelX, float toolbarH);
+
+        /**
+         * @brief Scroll the entity palette up or down.
+         * @param delta Positive to scroll up, negative to scroll down.
+         */
+        void handleScroll(float delta);
+
+        /// @brief Handle a left mouse button release (resets the test button and scrollbar drag).
         void handleRelease();
 
         /**
@@ -123,8 +324,17 @@ namespace HUD::Editor {
         // Getters
         // ----------------------------------------------------------------------------------
 
-        /// @brief Return the active fill mode index (0 = single, 1 = row, 2 = rect).
+        /// @brief Return the active fill mode index (0 = single, 1 = row, 2 = rect, 3 = select).
         int getFillSelected() const { return m_fillSelected; }
+
+        /// @brief True when the copy/paste selection tool is active.
+        bool isSelectTool() const { return m_fillSelected == 3; }
+
+        /// @brief Tile column last reported under the cave cursor.
+        int getMouseTileX() const { return m_mouseTileX; }
+
+        /// @brief Tile row last reported under the cave cursor.
+        int getMouseTileY() const { return m_mouseTileY; }
 
     private:
 
@@ -168,9 +378,57 @@ namespace HUD::Editor {
 
         /// @brief The currently selected entity type.
         Cave::Entity::Type        m_selectedType = Cave::Entity::Type::Space;
+        Cave::Entity::Type        m_spaceSlotType = Cave::Entity::Type::Space;
+        Cave::Entity::Type        m_pegulType    = Cave::Entity::Type::PegulNormo;
+        Cave::Entity::Type        m_fusionType   = Cave::Entity::Type::Fusion1;
+        Cave::Entity::Type        m_pyrozoType   = Cave::Entity::Type::Pyrozo;
+        Cave::Entity::Type        m_godType      = Cave::Entity::Type::God;
+        Cave::Entity::Type        m_dirtType     = Cave::Entity::Type::Dirt;
+        Cave::Entity::Type        m_mossType     = Cave::Entity::Type::Moss;
+        Cave::Entity::Type        m_jimlinType   = Cave::Entity::Type::Jimlin1;
+        Cave::Entity::Type        m_gateType     = Cave::Entity::Type::Gate;
+        Cave::Entity::Type        m_jimlinBlockType = Cave::Entity::Type::JimlinBlock;
+        Cave::Entity::Type        m_jimlinShipType = Cave::Entity::Type::JimlinShipInactive;
+        Cave::Entity::Type        m_hiveMatriarchType = Cave::Entity::Type::HiveMatriarch;
+        Cave::Entity::Type        m_hiveWallType = Cave::Entity::Type::HiveWall;
+
+        /// @brief Genom palette: randomize-on-place vs fixed packed look / movement.
+        bool                      m_genomRandomize = true;
+        int                       m_genomLook = 0;
+        int                       m_genomMove = Cave::Entity::Genom::MOVE_WANDER;
+        bool                      m_genomCanBreed = true;
+        bool                      m_genomDropsDiamonds = true;
+
+        void syncGenomPaletteEntity();
+
+        /// @brief Fish palette: randomize-on-place vs fixed packed look.
+        bool                      m_fishRandomize = true;
+        int                       m_fishLook = 0;
+
+        void syncFishPaletteEntity();
 
         /// @brief Tick counter that drives palette entity animation.
         Utils::TickCounter        m_TickCounter  = Utils::TickCounter();
+
+        /// @brief Current scroll row offset for the entity palette.
+        int                       m_scrollRow    = 0;
+        static constexpr int      TOTAL_PALETTE_ROWS   = 33;
+        static constexpr int      VISIBLE_PALETTE_ROWS = 10;
+        static constexpr int      MAX_SCROLL_ROW       = TOTAL_PALETTE_ROWS - VISIBLE_PALETTE_ROWS;
+
+        static constexpr float    PALETTE_W            = 104.f;
+        static constexpr float    PALETTE_H            = 342.f;
+        static constexpr float    SB_THICK             = 16.f;
+
+        /// @brief Win95 scrollbar art used beside the entity palette.
+        sf::Texture               m_sbTex;
+        std::optional<sf::Sprite> m_sbArrUp, m_sbArrDown, m_sbThumb, m_sbBgTile;
+        bool                      m_sbDragging     = false;
+        float                     m_sbDragOffsetY  = 0.f;
+
+        void setScrollRow(int row);
+        float scrollbarThumbHeight() const;
+        float scrollbarThumbY() const;
 
         // ----------------------------------------------------------------------------------
         // Builder menu area
@@ -228,10 +486,22 @@ namespace HUD::Editor {
         /// @brief Sprite for the Test button (normal and pressed frames).
         std::optional<sf::Sprite> m_testBtn;
 
+        /// @brief Font used to label the Simulate button.
+        sf::Font m_simFont;
+
+        /// @brief "Simulate" label drawn on the toggle button.
+        std::optional<sf::Text> m_simLabel;
+
+        /// @brief True while the Simulate button is held down.
+        bool m_simPressed = false;
+
         /// @brief Sprites for the three fill mode buttons (single / row / rect).
         std::optional<sf::Sprite> m_fillBtnL, m_fillBtnC, m_fillBtnR;
 
-        /// @brief Active fill mode: 0 = single tile, 1 = row, 2 = rectangle.
+        /// @brief Selection tool button under the fill modes.
+        std::optional<sf::Sprite> m_selectBtn;
+
+        /// @brief Active fill mode: 0 = single tile, 1 = row, 2 = rectangle, 3 = select.
         int  m_fillSelected = 0;
 
         /// @brief True while the test button is held down (shows pressed frame).

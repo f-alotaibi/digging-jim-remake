@@ -5,6 +5,7 @@
 #include "Cave/Manager/File.h"
 #include "Image/Manager.h"
 #include <SFML/Graphics.hpp>
+#include <cstdint>
 #include <vector>
 #include <string>
 
@@ -17,7 +18,7 @@ const std::string EDITOR_NAME = "Digging Jim Builder";
  * @class Editor
  * @brief Central controller for the Digging Jim Builder cave editor.
  *
- * Editor owns the game instance, image manager, and cave settings used
+ * Editor owns the game instance and cave settings used throughout the editor session.
  * throughout the editor session. All user interactions (menu items, keyboard
  * shortcuts, toolbar buttons) are routed through public action*() methods that
  * set private boolean flags. Each flag is consumed once per frame inside run(),
@@ -90,6 +91,12 @@ public:
     /// @brief Paste clipboard tile data into the current cave.
     void actionPasteLevel();
 
+    /// @brief Copy the current tile selection.
+    void actionCopySelection();
+
+    /// @brief Paste the tile selection at the cursor.
+    void actionPasteSelection();
+
     /// @brief Randomly distribute the selected entity across the cave interior.
     void actionRandomDist();
 
@@ -102,6 +109,10 @@ public:
 
     /// @brief Open the cave properties dialog for the current cave.
     void actionShowCaveProperties();
+
+    /// @brief Open the caves list window for the current file.
+    void actionShowCavesList();
+
 
     // ----------------------------------------------------------------------------------
     // View
@@ -131,6 +142,21 @@ public:
     /// @brief Save the current file and launch the game to test from the current cave.
     void actionTest();
 
+    /// @brief Toggle in-editor physics simulation. A second press restores the cave.
+    void actionSimulate();
+
+    /// @brief Open the Simulate speed dropdown (Pause / 1x / 2x / 10x).
+    void actionOpenSimSpeedMenu();
+
+    /// @brief True while in-editor Simulate is running.
+    bool isSimulating() const { return m_simulating; }
+
+    /// @brief Simulation steps per frame while simulating (0 = paused).
+    int simSpeed() const { return m_simSpeed; }
+
+    /// @brief Set simulation speed: 0 pause, 1 normal, 2 double, 10 tenfold.
+    void setSimSpeed(int speed);
+
     // ----------------------------------------------------------------------------------
     // Undo
     // ----------------------------------------------------------------------------------
@@ -138,15 +164,24 @@ public:
     /// @brief Request an undo of the last edit.
     void actionUndo();
 
+    /// @brief Request a redo of the last undone edit.
+    void actionRedo();
+
+    /// @brief True when an undo snapshot is available.
+    bool canUndo() const { return !m_undoStack.empty(); }
+
+    /// @brief True when a redo snapshot is available.
+    bool canRedo() const { return !m_redoStack.empty(); }
+
     /**
-     * @brief Snapshot the current map tile state before an edit is applied.
+     * @brief Snapshot the current file and map state before an edit is applied.
      *
      * Must be called immediately before any destructive edit so that
-     * actionUndo() can restore the map to this state. Also sets m_isDirty.
+     * actionUndo() can restore this state. Also sets m_isDirty and clears redo.
      *
      * @param map The current cave map.
      */
-    void saveUndoSnapshot(const Cave::Map& map);
+    void saveUndoSnapshot(Cave::Map& map);
 
     // ----------------------------------------------------------------------------------
     // Implementation helpers
@@ -156,13 +191,24 @@ public:
     /// @param map The cave map to clear.
     void clearLevel(Cave::Map& map);
 
-    /// @brief Copy the current map's tile data into the internal clipboard.
+    /// @brief Copy the current map's tiles, wells, portals, cosmics, and cave properties.
     /// @param map The cave map to copy from.
     void copyLevel(const Cave::Map& map);
 
-    /// @brief Paste the clipboard tile data into the current map.
+    /// @brief Paste the clipboard into the current map, including cave properties.
     /// @param map The cave map to paste into.
     void pasteLevel(Cave::Map& map);
+
+    /// @brief Copy the highlighted tile rectangle into the selection clipboard.
+    void copySelection(const Cave::Map& map);
+
+    /// @brief Paste the selection clipboard with its top-left at (destX, destY).
+    void pasteSelection(Cave::Map& map, int destX, int destY);
+
+    /// Inclusive paint range: interior only, or the full map including the border ring.
+    int paintMin() const { return settings.editableBorders ? 0 : 1; }
+    int paintMaxX(int width) const { return settings.editableBorders ? width - 1 : width - 2; }
+    int paintMaxY(int height) const { return settings.editableBorders ? height - 1 : height - 2; }
 
     /**
      * @brief Write the live map state back into the loadedFile cave entry.
@@ -196,17 +242,18 @@ public:
      * @param map              The live cave map (synced before saving).
      * @param loadedFile       The file to save.
      * @param currentCaveIndex Index of the currently active cave.
-     * @param window           Owner window for any error dialogs.
+     * @param showDoorWarnings If true, show missing-door warnings after a successful save.
      */
-    void saveFile(Cave::Map& map, Cave::File& loadedFile, int currentCaveIndex);
+    void saveFile(Cave::Map& map, Cave::File& loadedFile, int currentCaveIndex, bool showDoorWarnings = true);
 
     /**
      * @brief Prompt the user for a save path and write the file.
      * @param map              The live cave map (synced before saving).
      * @param loadedFile       The file to save.
      * @param currentCaveIndex Index of the currently active cave.
+     * @param showDoorWarnings If true, show missing-door warnings after a successful save.
      */
-    void saveFileAs(Cave::Map& map, Cave::File& loadedFile, int currentCaveIndex);
+    void saveFileAs(Cave::Map& map, Cave::File& loadedFile, int currentCaveIndex, bool showDoorWarnings = true);
 
     // ----------------------------------------------------------------------------------
     // Public members
@@ -217,9 +264,6 @@ public:
 
     /// @brief Editor-specific cave settings (animation, random dist, etc.).
     Cave::Settings   settings;
-
-    /// @brief Shared image manager for all textures used in the editor.
-    Image::Manager   imageManager;
 
 private:
 
@@ -263,6 +307,12 @@ private:
     /// @brief Set by actionPasteLevel(); handled each frame in run().
     bool m_doPasteLevel    = false;
 
+    /// @brief Set by actionCopySelection(); handled each frame in run().
+    bool m_doCopySelection = false;
+
+    /// @brief Set by actionPasteSelection(); handled each frame in run().
+    bool m_doPasteSelection = false;
+
     /// @brief Set by actionRandomDist(); handled each frame in run().
     bool m_doRandomDist    = false;
 
@@ -272,24 +322,79 @@ private:
     /// @brief Set by actionShowCaveProperties(); handled each frame in run().
     bool m_doShowCaveProps = false;
 
+    /// @brief Open Cosmic Settings after right-clicking a placed Singularity.
+    bool m_doShowCosmicSettings = false;
+
+    /// @brief Set by actionShowCavesList(); opens the caves list window.
+    bool m_showCavesList = false;
+
+    /// @brief Skip outside-click close for a couple of frames after opening the list.
+    int m_cavesListIgnoreClick = 0;
+
     /// @brief Whether small (16px) block mode is active.
     bool m_smallBlocks     = false;
+
+    /// @brief Cave view zoom. 1 = normal (640x480 world), 0.5 = small blocks, >1 zoomed in.
+    float m_viewZoom       = 1.f;
 
     /// @brief Set by actionUndo(); handled each frame in run().
     bool m_doUndo          = false;
 
+    /// @brief Set by actionRedo(); handled each frame in run().
+    bool m_doRedo          = false;
+
     /// @brief Set by actionTest(); handled each frame in run().
     bool m_doTest          = false;
 
+    /// @brief Set by actionSimulate(); handled each frame in run().
+    bool m_doSimulate      = false;
+
+    /// @brief True while in-editor Simulate is running.
+    bool m_simulating      = false;
+
+    /// @brief Map updates per rendered frame while simulating (0 = paused).
+    int m_simSpeed = 1;
+
+    /// @brief Set by right-clicking Simulate while running; opens the speed popup.
+    bool m_openSimSpeedMenu = false;
+
     // ----------------------------------------------------------------------------------
-    // Undo state
+    // Undo / redo state
     // ----------------------------------------------------------------------------------
 
-    /// @brief Tile data snapshot taken before the last edit, used to restore on undo.
-    std::vector<char> m_undoTileData;
+    struct EditorSnapshot {
+        std::vector<Cave::Data> caves;
+        int currentCaveIndex = 0;
+        std::vector<Cave::Entity::Animation> previewAnims;
+    };
 
-    /// @brief True when an undo snapshot is available to apply; cleared after use.
-    bool m_undoAvailable = false;
+    std::vector<EditorSnapshot> m_undoStack;
+    std::vector<EditorSnapshot> m_redoStack;
+
+    /// @brief Cave state captured when Simulate was turned on.
+    EditorSnapshot m_simulateSnap;
+
+    Cave::File* m_activeFile = nullptr;
+    int* m_activeCaveIndex = nullptr;
+
+    int m_cavesListGoTo = -1;
+    int m_cavesListDup = -1;
+    int m_cavesListDel = -1;
+    int m_cavesListMoveFrom = -1;
+    int m_cavesListMoveTo = -1;
+    int m_cavesListRename = -1;
+    int m_cavesListRenameCommit = -1;
+    bool m_cavesListRenameFocus = false;
+    char m_cavesListRenameBuf[65] = {};
+    std::string m_cavesListRenameCommitName;
+
+    void clearUndoHistory();
+    void applyEditorSnapshot(const EditorSnapshot& snap, Cave::Map& map, Cave::File& loadedFile, int& currentCaveIndex);
+    void startSimulate(Cave::Map& map);
+    /// @param allowCancel When true, dialog includes Cancel which leaves Simulate running.
+    void stopSimulate(Cave::Map& map, Cave::File& loadedFile, int& currentCaveIndex, bool allowCancel = true);
+    void drawCavesListWindow(int currentCaveIndex, Cave::File& loadedFile);
+    void reorderCaves(Cave::File& loadedFile, int& currentCaveIndex, int from, int to);
 
     // ----------------------------------------------------------------------------------
     // File state
@@ -301,11 +406,33 @@ private:
     /// @brief True if there are unsaved edits since the last save or file load.
     bool m_isDirty = false;
 
+    /// @brief Ignore cave/panel mouse until LMB+RMB are released after a native dialog.
+    /// Stops open/save double-clicks from painting into the preview.
+    bool m_suppressEditorMouseUntilRelease = false;
+
     /// @brief True when developer mode is active (toggled with Ctrl+D).
     bool m_developerMode = false;
 
     /// @brief Tile data copied by copyLevel(), pasted by pasteLevel().
     std::vector<char> m_clipboardTileData;
+    std::vector<Cave::WellRecord> m_clipboardWells;
+    std::vector<Cave::PortalRecord> m_clipboardPortals;
+    std::vector<Cave::CosmicRecord> m_clipboardCosmics;
+    std::vector<Cave::GenomRecord> m_clipboardGenoms;
+    std::vector<Cave::HiveBubbleRecord> m_clipboardHiveBubbles;
+    std::vector<Cave::HiveBubbleRecord> m_clipboardWaterUnders;
+    std::vector<Cave::TrapFullRecord> m_clipboardTrapFulls;
+    Cave::Properties m_clipboardProperties{};
+
+    bool m_hasSelection = false;
+    int  m_selX0 = 0, m_selY0 = 0, m_selX1 = 0, m_selY1 = 0;
+    int  m_clipW = 0, m_clipH = 0;
+    std::vector<char> m_selectionClipboard;
+    std::vector<int32_t> m_selectionWellPacked;
+    std::vector<int32_t> m_selectionPortalPacked;
+    std::vector<int32_t> m_selectionGenomPacked;
+    std::vector<int32_t> m_selectionTrapPacked;
+    std::vector<int32_t> m_selectionTrapLook;
 
     // ----------------------------------------------------------------------------------
     // Internal helpers
@@ -318,14 +445,15 @@ private:
     /// @param e The key-pressed event to process.
     void handleShortcuts(const sf::Event::KeyPressed& e, HUD::Editor::Panel* panel);
 
+    /// @brief After tinyfd dialogs, ignore editor mouse until buttons are released.
+    void suppressEditorMouseAfterNativeDialog();
+
     /**
-     * @brief Check all caves for missing start/exit doors and show a warning per issue.
+     * @brief Check all caves for missing/mismatched start/exit doors and show warnings.
      *
-     * Called after a successful save so the user is informed of any problems
-     * without blocking the save itself.
+     * Used after save, when saving on editor exit, and before Test.
      *
      * @param loadedFile The file whose caves will be checked.
-     * @param window     Owner window for the warning dialogs.
      */
     void checkSaveWarnings(const Cave::File& loadedFile);
 

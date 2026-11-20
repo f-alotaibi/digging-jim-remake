@@ -25,6 +25,8 @@ void Renderer::TextRenderer::updateNumbers(const std::vector<NumberItem>& items)
         int n = item.value;
 
         for (int x = item.digits - 1; x >= 0; --x) {
+            if (index >= static_cast<int>(m_length))
+                break;
 
             sf::Vector2i textureCoords = { n % 10 + item.highlight * 10, 0 };
             n /= 10;
@@ -67,7 +69,19 @@ void Renderer::TextRenderer::updateNumbers(const std::vector<NumberItem>& items)
             tri[4].position = { px2, py2 };
             tri[5].position = { px1, py2 };
 
+            for (int v = 0; v < 6; ++v)
+                tri[v].color = sf::Color::White;
+
             index++;
+        }
+    }
+
+    // Hide leftover glyphs so previous layouts cannot leak into the cave.
+    for (; index < static_cast<int>(m_length); ++index) {
+        sf::Vertex* tri = &m_vertices[index * 6];
+        for (int v = 0; v < 6; ++v) {
+            tri[v].position = { 0.f, 0.f };
+            tri[v].color = sf::Color::Transparent;
         }
     }
 }
@@ -232,4 +246,10 @@ void Renderer::TextRenderer::render(sf::RenderTarget& target, sf::RenderStates s
     states.transform *= getTransform();
     states.texture = &m_tileset;
     target.draw(m_vertices, states);
+}
+
+void Renderer::TextRenderer::setColor(const sf::Color& color) {
+    for (std::size_t i = 0; i < m_vertices.getVertexCount(); ++i) {
+        m_vertices[i].color = color;
+    }
 }

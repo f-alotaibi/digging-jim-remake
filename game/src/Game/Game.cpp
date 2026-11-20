@@ -4,15 +4,22 @@
 #include "HUD/Developer/FPSCounter.h"
 #include "HUD/Developer/CameraCenter.h"
 #include "HUD/Level/Panel.h"
+#include "HUD/Level/InventoryMenu.h"
+#include "HUD/Level/PauseMenu.h"
 #include "HUD/MainMenu/MainMenu.h"
 
 #include "Cave/Map/Map.h"
 #include "Cave/Manager/Manager.h"
-#include "Utils/Counter.h"
+#include "Utils/Random.h"
+#include "Utils/Prescale.h"
+#include "Net/Session.h"
+#include <chrono>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <filesystem>
+#include "Utils/Counter.h"
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -21,11 +28,120 @@
 #include <imgui.h>
 #include <imgui-SFML.h>
 
+#include <cstdio>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <cctype>
 #include <system_error>
+#ifdef _WIN32
+#include <cwchar>
+#endif
+
+namespace {
+
+#ifdef _WIN32
+WNDPROC g_prevWndProc = nullptr;
+bool g_appActive = true;
+
+bool isSmallWindow(HWND hwnd, int maxW, int maxH) {
+    RECT rc{};
+    if (!GetWindowRect(hwnd, &rc)) return false;
+    return (rc.right - rc.left) < maxW && (rc.bottom - rc.top) < maxH;
+}
+
+bool isShellOverlayWindow(HWND hwnd) {
+    if (!hwnd) return true;
+    wchar_t cls[256]{};
+    if (GetClassNameW(hwnd, cls, 256) <= 0) return false;
+
+    static const wchar_t* kAlwaysOverlay[] = {
+        L"ForegroundStaging",
+        L"DummyDWMListenerWindow",
+        L"NativeHWNDHost",
+        L"Xaml_WindowedPopupClass",
+        L"Windows.Internal.Shell.TabProxyWindow",
+        L"Windows.UI.Input.InputSite.WindowClass",
+        L"Windows.UI.Composition.DesktopWindowContentBridge",
+        L"Shell_TrayWnd",
+        L"Shell_SecondaryTrayWnd",
+        L"NotifyIconOverflowWindow",
+        L"CiceroUIWndFrame",
+        L"IME",
+        L"MSCTFIME UI",
+        L"tooltips_class32",
+        L"ToolTips_Class32",
+        L"SysShadow",
+        L"Auto-Suggest Dropdown",
+        L"OfficeTooltip",
+        L"Shell_InputSwitchTopLevelWindow",
+        L"InputSwitcher_WinUIDesktopWin32Window",
+        L"TaskListThumbnailWnd",
+        L"TaskListOverlayWnd",
+        L"TopLevelWindowForOverflowXamlIsland",
+        L"ApplicationManager_DesktopShellWindow",
+        L"#32768",
+        L"GDI+ Hook Window Class",
+        L"OleMainThreadWndClass",
+        L"MultitaskingViewFrame",
+        L"XamlExplorerHostIslandWindow",
+        L"Windows.UI.Core.CoreWindow",
+    };
+    for (const wchar_t* name : kAlwaysOverlay) {
+        if (_wcsicmp(cls, name) == 0) return true;
+    }
+    if (wcsncmp(cls, L"ATL:", 4) == 0) return true;
+
+    const LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (ex & WS_EX_NOACTIVATE) return true;
+    if ((ex & WS_EX_TOOLWINDOW) && isSmallWindow(hwnd, 900, 600)) return true;
+    if ((ex & WS_EX_TOPMOST) && !(style & WS_CAPTION) && isSmallWindow(hwnd, 900, 600))
+        return true;
+    return false;
+}
+
+LRESULT CALLBACK gameWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_ACTIVATEAPP:
+        g_appActive = (wParam != FALSE);
+        if (g_appActive)
+            LockSetForegroundWindow(LSFW_LOCK);
+        break;
+    default:
+        break;
+    }
+    if (g_prevWndProc)
+        return CallWindowProc(g_prevWndProc, hWnd, msg, wParam, lParam);
+    return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+bool shouldAcceptGameplayInput(HWND gameHwnd) {
+    if (!gameHwnd) return true;
+    if (IsIconic(gameHwnd)) return false;
+
+    // Real Alt+Tab / click-away is WM_ACTIVATEAPP, not a toast stealing WM_KILLFOCUS.
+    if (g_appActive) return true;
+
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == gameHwnd) return true;
+    if (GetAncestor(fg, GA_ROOTOWNER) == gameHwnd) return true;
+
+    DWORD fgPid = 0;
+    GetWindowThreadProcessId(fg, &fgPid);
+    if (fgPid == GetCurrentProcessId()) return true;
+    // Toast / task-switcher overlays still deactivate the app; keep playing.
+    if (isShellOverlayWindow(fg)) return true;
+    return false;
+}
+#else
+bool shouldAcceptGameplayInput(const sf::Window& window) {
+    return window.hasFocus();
+}
+#endif
+
+}
 
 // ----------------------------------------------------------------------------------
 // Construction
@@ -39,7 +155,8 @@ Game::Game() :
     m_extraLifeThreshold(EXTRA_LIFE_SCORE_STEP),
     m_time(0),
     m_score(0),
-    m_gameIsPaused(0),
+    m_gameIsPaused(false),
+    m_quitConfirmOpen(false),
     m_caveFileIndex(0),
     m_chosenCaveNumber(INITIAL_CAVE)
 {
@@ -51,6 +168,27 @@ Game::Game() :
 // ----------------------------------------------------------------------------------
 
 void Game::sendSignal(const GameSignal& signal) {
+    if (signal == GameSignal::OpenQuitConfirm) {
+        if (m_gameState != GameState::MainMenu) {
+            m_quitConfirmOpen = true;
+            m_gameIsPaused = true;
+        }
+        return;
+    }
+    if (signal == GameSignal::CloseQuitConfirm) {
+        m_quitConfirmOpen = false;
+        m_gameIsPaused = false;
+        return;
+    }
+
+    const GameState previousState = m_gameState;
+    if (signal == GameSignal::GotoMainMenu) {
+        m_quitConfirmOpen = false;
+        m_gameIsPaused = false;
+        m_net.setPlaying(false);
+        m_net.leave();
+    }
+
     switch (m_gameState) {
     case GameState::MainMenu: handleMainMenu(signal); break;
     case GameState::CaveLoad: handleCaveLoad(signal); break;
@@ -60,11 +198,36 @@ void Game::sendSignal(const GameSignal& signal) {
     case GameState::GameDone: handleGameDone(signal); break;
     case GameState::GameOver: handleGameOver(signal); break;
     }
+
+    // Always leave the cave after Quit, even if death/respawn already changed state.
+    if (signal == GameSignal::GotoMainMenu) {
+        if (m_editorMode) {
+            m_closeWindow = true;
+            return;
+        }
+        m_gameState = GameState::MainMenu;
+        m_caveActive = false;
+        m_revealCaveHUD = false;
+        m_makeHUDDisappear = true;
+        m_exitedFromCave = true;
+        soundManager.stop(Sound::Effect::Amoeba);
+        soundManager.stop(Sound::Effect::MagicWall);
+        soundManager.fadeOut(Sound::Effect::Agent);
+        if (previousState == GameState::GameDone || previousState == GameState::GameOver)
+            setCaveNumber(m_chosenCaveNumber);
+    }
 }
 
 void Game::handleMainMenu(const GameSignal& signal) {
     switch (signal) {
     case GameSignal::PlayGame:
+        if (m_settings.setRefreshRateOnStart) setRefreshrate();
+        resetGame();
+        m_chosenCaveNumber = getCaveNumber();
+        m_gameState = GameState::CaveLoad;
+        m_revealCaveHUD = true;
+        break;
+    case GameSignal::PlayMultiplayer:
         if (m_settings.setRefreshRateOnStart) setRefreshrate();
         resetGame();
         m_chosenCaveNumber = getCaveNumber();
@@ -115,6 +278,7 @@ void Game::handleCaveLoad(const GameSignal& signal) {
 
     case GameSignal::GameCompleted:
         m_gameState = GameState::GameDone;
+        m_caveActive = false;
         break;
 
     case GameSignal::GotoMainMenu:
@@ -150,6 +314,17 @@ void Game::handleCavePlay(const GameSignal& signal) {
         m_collected++;
         break;
 
+    case GameSignal::CollectRuby:
+        m_score += 100;
+        break;
+
+    case GameSignal::CaveCheckpointResume:
+        m_gameState = GameState::CavePlay;
+        m_gameIsPaused = false;
+        m_quitConfirmOpen = false;
+        soundManager.fadeOut(Sound::Effect::Agent);
+        break;
+
     case GameSignal::CavePause:
         m_gameIsPaused = true;
         break;
@@ -160,6 +335,7 @@ void Game::handleCavePlay(const GameSignal& signal) {
 
     case GameSignal::GameCompleted:
         m_gameState = GameState::GameDone;
+        m_caveActive = false;
         break;
 
     case GameSignal::GotoMainMenu:
@@ -171,6 +347,7 @@ void Game::handleCavePlay(const GameSignal& signal) {
         m_exitedFromCave = true;
         soundManager.stop(Sound::Effect::Amoeba);
         soundManager.stop(Sound::Effect::MagicWall);
+        soundManager.fadeOut(Sound::Effect::Agent);
         break;
 
     default:
@@ -187,6 +364,7 @@ void Game::handleCavePass(const GameSignal& signal) {
 
     case GameSignal::GameCompleted:
         m_gameState = GameState::GameDone;
+        m_caveActive = false;
         break;
 
     case GameSignal::GotoMainMenu:
@@ -197,6 +375,7 @@ void Game::handleCavePass(const GameSignal& signal) {
         m_makeHUDDisappear = true;
         soundManager.stop(Sound::Effect::Amoeba);
         soundManager.stop(Sound::Effect::MagicWall);
+        soundManager.fadeOut(Sound::Effect::Agent);
         break;
 
     default:
@@ -210,13 +389,18 @@ void Game::handleCaveFail(const GameSignal& signal) {
         m_lives--;
         if (m_lives == 0) {
             m_gameState = GameState::GameOver;
+            m_caveActive = false;
+            m_revealCaveHUD = false;
             break;
         }
         resetCaveState();
         break;
 
-    case GameSignal::GameCompleted:
-        m_gameState = GameState::GameDone;
+    case GameSignal::CaveCheckpointResume:
+        m_gameState = GameState::CavePlay;
+        m_gameIsPaused = false;
+        m_quitConfirmOpen = false;
+        soundManager.fadeOut(Sound::Effect::Agent);
         break;
 
     case GameSignal::GotoMainMenu:
@@ -228,6 +412,7 @@ void Game::handleCaveFail(const GameSignal& signal) {
         m_exitedFromCave = true;
         soundManager.stop(Sound::Effect::Amoeba);
         soundManager.stop(Sound::Effect::MagicWall);
+        soundManager.fadeOut(Sound::Effect::Agent);
         break;
 
     default:
@@ -278,10 +463,34 @@ bool Game::run(const std::string& caveFile, int startCave, bool editorMode, bool
 
 void Game::mainGameLoop() {
 
-    window = m_editorFullscreen
-        ? sf::RenderWindow(sf::VideoMode::getDesktopMode(), APPLICATION_NAME, sf::State::Fullscreen)
-        : sf::RenderWindow(sf::VideoMode({ SCREEN_WIDTH, SCREEN_HEIGHT }), APPLICATION_NAME);
+    // Borderless windowed (not exclusive Fullscreen): fills the screen like before,
+    // but avoids the white mode-switch flash and blank screen-capture surfaces.
+    if (m_editorFullscreen) {
+        const sf::VideoMode desk = sf::VideoMode::getDesktopMode();
+        // +1 height keeps Windows on the compositor path; exact desktop size can be
+        // promoted to exclusive fullscreen and break recording/capture.
+        sf::Vector2u size = desk.size;
+        size.y += 1;
+        window = sf::RenderWindow(sf::VideoMode(size, desk.bitsPerPixel), APPLICATION_NAME,
+            sf::Style::None, sf::State::Windowed);
+        window.setPosition({ 0, 0 });
+    }
+    else {
+        window = sf::RenderWindow(sf::VideoMode({ SCREEN_WIDTH, SCREEN_HEIGHT }), APPLICATION_NAME);
+    }
+    window.setVisible(false);
     setRefreshrate();
+    window.setMouseCursorVisible(false);
+#ifdef _WIN32
+    HWND gameHwnd = static_cast<HWND>(window.getNativeHandle());
+    if (gameHwnd) {
+        ShowWindow(gameHwnd, SW_HIDE);
+        g_prevWndProc = reinterpret_cast<WNDPROC>(
+            SetWindowLongPtr(gameHwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(gameWndProc)));
+        g_appActive = true;
+        LockSetForegroundWindow(LSFW_LOCK);
+    }
+#endif
 
     imageManager.loadAllImages();
     soundManager.loadAllSounds();
@@ -292,6 +501,8 @@ void Game::mainGameLoop() {
 
     HUD::MainMenu::MainMenu mainMenu(this);
     HUD::Level::Panel levelPanel(this);
+    HUD::Level::InventoryMenu inventoryMenu(this);
+    HUD::Level::PauseMenu pauseMenu(this);
     HUD::Developer::PositionDisplay jimPositionDisplay;
     HUD::Developer::PositionDisplay cameraPositionDisplay;
     HUD::Developer::PositionDisplay cameraOffsetDisplay;
@@ -303,8 +514,14 @@ void Game::mainGameLoop() {
     shaderManager.loadAllShaders();
     caveManager.load();
     m_caveFilenames = caveManager.getCaveFiles();
+    setCaveDoorLookup([&caveManager](int fileIndex, int caveNumber) {
+        const auto doors = caveManager.countDoors(fileIndex, caveNumber);
+        return DoorCount{ doors.start, doors.exit };
+    });
 
     levelPanel.load();
+    inventoryMenu.load();
+    pauseMenu.load();
     mainMenu.load();
 
     if (m_editorMode)
@@ -403,14 +620,110 @@ void Game::mainGameLoop() {
     bool showtrigger = false;
 
     sf::Clock deltaClock;
+    sf::Clock loopClock;
+    float logicAccum = 0.f;
+    constexpr float kLogicDt = 1.f / 64.f; // classic Digjim logic rate
+    constexpr int kMaxLogicSteps = 8;
 
     sf::Vector2f cameraOffset = { 0, 0 };
 
     Camera camera({ SCREEN_WIDTH, SCREEN_HEIGHT }, { 0.f, 0.f }, { 640.f, 480.f });
 
-    // Fixed-size virtual render texture — all game content draws here,
-    // then the texture is stretched to fill whatever size the window is.
+    // Fixed-size virtual RT; two-pass stretch-to-fill present (no bars).
     sf::RenderTexture rt(sf::Vector2u(SCREEN_WIDTH, SCREEN_HEIGHT));
+    rt.setSmooth(false);
+    camera.setScrollQuantum({ 1u, 1u });
+    std::unique_ptr<sf::RenderTexture> presentMidRt;
+
+    // Present into true desktop size; window may be +1px tall for capture-friendly borderless.
+    const sf::Vector2u presentTarget = m_editorFullscreen
+        ? sf::VideoMode::getDesktopMode().size
+        : sf::Vector2u{};
+
+    // Fragment-only (SFML default vertex). Vert+frag legacy builtins can "succeed"
+    // while leaving broken texcoords — which silently falls back to looking like nearest.
+    sf::Shader presentShader;
+    sf::Shader* presentShaderPtr = nullptr;
+    {
+        const bool ok = presentShader.loadFromFile("./assets/shaders/present.frag",
+            sf::Shader::Type::Fragment);
+        if (ok)
+            presentShaderPtr = &presentShader;
+        if (FILE* f = std::fopen("present_debug.txt", "w")) {
+            const sf::Vector2u desk = sf::VideoMode::getDesktopMode().size;
+            const sf::Vector2u winSz = window.getSize();
+            std::fprintf(f, "present_shader=%s\n", ok ? "ok" : "FAIL");
+            std::fprintf(f, "desktop=%ux%u window=%ux%u presentTarget=%ux%u\n",
+                desk.x, desk.y, winSz.x, winSz.y,
+                presentTarget.x, presentTarget.y);
+            std::fclose(f);
+        }
+    }
+
+    // Cave post FX ping-pong RT (parasite color blend / water wave).
+    sf::RenderTexture parasiteColorRt(sf::Vector2u(SCREEN_WIDTH, SCREEN_HEIGHT));
+    parasiteColorRt.setSmooth(false);
+    sf::RenderTexture waterMaskRt(sf::Vector2u(SCREEN_WIDTH, SCREEN_HEIGHT));
+    waterMaskRt.setSmooth(false);
+
+    sf::Shader colorBlendShader;
+    bool colorBlendOk = colorBlendShader.loadFromFile(
+        "./assets/shaders/color_blend.frag", sf::Shader::Type::Fragment);
+    if (colorBlendOk) {
+        colorBlendShader.setUniform("blendColor", sf::Glsl::Vec3(
+            97.f / 255.f, 59.f / 255.f, 106.f / 255.f)); // #613b6a
+        colorBlendShader.setUniform("tint", sf::Glsl::Vec3{ 0.5f, 0.5f, 0.5f });
+        colorBlendShader.setUniform("time", 0.f);
+    }
+
+    sf::Shader waterWaveShader;
+    bool waterWaveOk = waterWaveShader.loadFromFile(
+        "./assets/shaders/water_wave.frag", sf::Shader::Type::Fragment);
+    if (waterWaveOk) {
+        waterWaveShader.setUniform("time", 0.f);
+        // Soft water-blue for the Color brightness layer (#4a7fa0).
+        waterWaveShader.setUniform("blendColor", sf::Glsl::Vec3(
+            74.f / 255.f, 127.f / 255.f, 160.f / 255.f));
+        waterWaveShader.setUniform("tint", sf::Glsl::Vec3{ 0.5f, 0.5f, 0.5f });
+        waterWaveShader.setUniform("viewCenter", sf::Glsl::Vec2{ 0.f, 0.f });
+        waterWaveShader.setUniform("viewSize", sf::Glsl::Vec2{
+            static_cast<float>(SCREEN_WIDTH), static_cast<float>(SCREEN_HEIGHT) });
+        waterWaveShader.setUniform("rtSize", sf::Glsl::Vec2{
+            static_cast<float>(SCREEN_WIDTH), static_cast<float>(SCREEN_HEIGHT) });
+    }
+
+    sf::Shader agentWaveShader;
+    bool agentWaveOk = agentWaveShader.loadFromFile(
+        "./assets/shaders/agent_wave.frag", sf::Shader::Type::Fragment);
+    if (agentWaveOk) {
+        agentWaveShader.setUniform("time", 0.f);
+        agentWaveShader.setUniform("viewCenter", sf::Glsl::Vec2{ 0.f, 0.f });
+        agentWaveShader.setUniform("viewSize", sf::Glsl::Vec2{
+            static_cast<float>(SCREEN_WIDTH), static_cast<float>(SCREEN_HEIGHT) });
+        agentWaveShader.setUniform("rtSize", sf::Glsl::Vec2{
+            static_cast<float>(SCREEN_WIDTH), static_cast<float>(SCREEN_HEIGHT) });
+        agentWaveShader.setUniform("centerCount", 0);
+        for (int i = 0; i < Cave::Entity::Agent::WAVE_CENTER_CAP; ++i) {
+            agentWaveShader.setUniform(
+                ("center" + std::to_string(i)).c_str(),
+                sf::Glsl::Vec2{ 0.f, 0.f });
+        }
+    }
+
+    auto bindAgentWaveCenters = [&](sf::Shader& shader, const Cave::Map& m, int offset) {
+        const auto& centers = m.agentWaveCenters();
+        const int total = static_cast<int>(centers.size());
+        const int n = std::clamp(total - offset, 0, Cave::Entity::Agent::WAVE_CENTER_CAP);
+        shader.setUniform("centerCount", n);
+        for (int i = 0; i < Cave::Entity::Agent::WAVE_CENTER_CAP; ++i) {
+            const sf::Vector2f c = (i < n)
+                ? centers[static_cast<size_t>(offset + i)]
+                : sf::Vector2f{ 0.f, 0.f };
+            shader.setUniform(
+                ("center" + std::to_string(i)).c_str(),
+                sf::Glsl::Vec2{ c.x, c.y });
+        }
+    };
 
     // View that maps the virtual screen (640x480) to fill the entire window.
     auto makeWindowView = [&]() -> sf::View {
@@ -424,8 +737,14 @@ void Game::mainGameLoop() {
 
     window.setView(makeWindowView());
 
+    bool windowShown = false;
+
     while (window.isOpen())
     {
+        inputSystem.setIgnoreWasd(
+            m_gameState == GameState::MainMenu || m_gameIsPaused || m_quitConfirmOpen
+            || inventoryMenu.isOpen());
+
         if (showtrigger) {
             showtrigger = false;
             showProps = !showProps;
@@ -437,12 +756,30 @@ void Game::mainGameLoop() {
 
         while (const std::optional event = window.pollEvent())
         {
+            if (event->is<sf::Event::FocusLost>()) {
+                inputSystem.suppressSelfDestructUntilTabReleased();
+#ifdef _WIN32
+                if (g_appActive)
+                    (void)window.setActive(true);
+#endif
+            }
+            if (event->is<sf::Event::FocusGained>()) {
+                inputSystem.suppressSelfDestructUntilTabReleased();
+                (void)window.setActive(true);
+#ifdef _WIN32
+                g_appActive = true;
+                LockSetForegroundWindow(LSFW_LOCK);
+#endif
+            }
+
             if (showProps) {
                 if (!event) continue;
                 ImGui::SFML::ProcessEvent(window, *event);
             }
             else {
                 inputSystem.handleEvent(event.value());
+                if (const auto* text = event->getIf<sf::Event::TextEntered>())
+                    handleTextInput(text->unicode);
             }
 
             if (event->is<sf::Event::Closed>())
@@ -456,148 +793,356 @@ void Game::mainGameLoop() {
             }
         }
 
+#ifdef _WIN32
+        const bool acceptInput = shouldAcceptGameplayInput(static_cast<HWND>(window.getNativeHandle()));
+#else
+        const bool acceptInput = shouldAcceptGameplayInput(window);
+#endif
         if (showProps) ImGui::SFML::Update(window, deltaClock.restart());
-        else {
-            inputSystem.handleJoystick();
-        }
 
+        if (acceptInput) {
+            (void)window.setActive(true);
+        }
 
         if (m_closeWindow) {
+#ifdef _WIN32
+            if (m_editorMode) {
+                // Let the parent editor reclaim focus immediately on quit.
+                LockSetForegroundWindow(LSFW_UNLOCK);
+                AllowSetForegroundWindow(ASFW_ANY);
+            }
+#endif
             window.close();
+            if (m_editorMode)
+                break;
         }
 
-        // Check if cheat mode is activated
-        if (inputSystem.wasPressed(Input::Action::ActivateCheatMode)) {
-            soundManager.play(Sound::Effect::Yippee);
-            m_cheatMode = true;
-        }
-
-        if (cheatMode()) {
-
-            if (inputSystem.wasPressed(Input::Action::RestartCave) && !isGameCompleted() && !isGameOver()) {
-                map.markForReset();
-            }
-            if (inputSystem.wasPressed(Input::Action::ForwardCave) && !isGameCompleted() && !isGameOver()) {
-                nextCave();
-                map.markForReset();
-            }
-            if (inputSystem.wasPressed(Input::Action::BackwardCave) && !isGameCompleted() && !isGameOver()) {
-                decrementCaveNumber(1);
-                map.markForReset();
-            }
-
-        }
-
-        if (cheatMode() && developerMode()) {
-
-            if (inputSystem.wasPressed(Input::Action::ToggleEditorProperties)) {
-                showtrigger = true;
-            }
-
-            if (inputSystem.isPressed(Input::Action::CameraUp)) {
-                if (cameraOffset.y > -2000) cameraOffset.y -= 4;
-            }
-            if (inputSystem.isPressed(Input::Action::CameraDown)) {
-                if (cameraOffset.y < 2000)  cameraOffset.y += 4;
-            }
-            if (inputSystem.isPressed(Input::Action::CameraLeft)) {
-                if (cameraOffset.x > -2000) cameraOffset.x -= 4;
-            }
-            if (inputSystem.isPressed(Input::Action::CameraRight)) {
-                if (cameraOffset.x < 2000)  cameraOffset.x += 4;
-            }
-            if (inputSystem.isPressed(Input::Action::CameraReset)) {
-                cameraOffset = { 0, 0 };
-            }
-
-        }
-
-        setCaveCount(static_cast<int>(caveManager.numCaves(getCaveFileIndex())));
+        window.setMouseCursorVisible(showProps || !acceptInput);
 
         if (showProps) Cave::editCaveProperties(window, m_caveProperties, getCaveProperties(), map.getDiamondCount(), showtrigger);
 
-        // ---- Render to virtual screen (fixed 640x480 render texture) --------
+        // ---- Fixed 64 Hz logic / uncapped (vsync) render ----
+        float frameSec = loopClock.restart().asSeconds();
+        if (frameSec > 0.1f) frameSec = 0.1f;
+        logicAccum += frameSec;
+
+        int logicSteps = 0;
+        while (logicAccum >= kLogicDt && logicSteps < kMaxLogicSteps) {
+            logicAccum -= kLogicDt;
+            ++logicSteps;
+
+            if (!showProps) {
+                inputSystem.syncKeyboard(acceptInput);
+                if (acceptInput)
+                    inputSystem.handleJoystick();
+            }
+
+            pollNetwork();
+
+            if (inputSystem.wasPressed(Input::Action::ActivateCheatMode)) {
+                soundManager.play(Sound::Effect::Yippee);
+                m_cheatMode = true;
+            }
+
+            if (cheatMode()) {
+                if (inputSystem.wasPressed(Input::Action::RestartCave) && !isGameCompleted() && !isGameOver()) {
+                    map.markForReset();
+                }
+                if (inputSystem.wasPressed(Input::Action::ForwardCave) && !isGameCompleted() && !isGameOver()) {
+                    nextCave();
+                    map.markForReset();
+                }
+                if (inputSystem.wasPressed(Input::Action::BackwardCave) && !isGameCompleted() && !isGameOver()) {
+                    decrementCaveNumber(1);
+                    map.markForReset();
+                }
+
+                if (caveActive && inputSystem.wasPressed(Input::Action::ToggleFreeCamera)) {
+                    m_freeCamera = !m_freeCamera;
+                    if (!m_freeCamera) {
+                        cameraOffset = { 0, 0 };
+                        map.snapCameraToJim();
+                    }
+                }
+
+                if (m_freeCamera) {
+                    if (inputSystem.isPressed(Input::Action::MoveUp))
+                        cameraOffset.y -= 4;
+                    if (inputSystem.isPressed(Input::Action::MoveDown))
+                        cameraOffset.y += 4;
+                    if (inputSystem.isPressed(Input::Action::MoveLeft))
+                        cameraOffset.x -= 4;
+                    if (inputSystem.isPressed(Input::Action::MoveRight))
+                        cameraOffset.x += 4;
+                }
+            }
+            else {
+                m_freeCamera = false;
+                cameraOffset = { 0, 0 };
+            }
+
+            if (cheatMode() && developerMode()) {
+                if (inputSystem.wasPressed(Input::Action::ToggleEditorProperties)) {
+                    showtrigger = true;
+                }
+            }
+
+            setCaveCount(static_cast<int>(caveManager.numCaves(getCaveFileIndex())));
+
+            if (caveActive) {
+                map.update(camera);
+                if (map.requiresReset()
+                    && m_caveActive
+                    && !onMainMenu()
+                    && !isGameOver()
+                    && !isGameCompleted()) {
+                    caveManager.startCave(getCaveFileIndex(), getCaveNumber(), &m_caveProperties, &map);
+                    map.prepareForPlay();
+                    camera.setBounds(map.getCameraBounds());
+                    if (map.resetCameraPosition()) camera.setCentre(map.getCameraStartLocation());
+                    cameraOffset = { 0, 0 };
+                }
+                cameraTarget = map.updateCameraLocation(camera, cameraOffset);
+                if (m_freeCamera) {
+                    cameraOffset.x += camera.getCenter().x - cameraTarget.x;
+                    cameraOffset.y += camera.getCenter().y - cameraTarget.y;
+                }
+                map.updateVisibleTiles(camera);
+            }
+
+            update();
+
+            shaderManager.update();
+            levelPanel.update(camera);
+            inventoryMenu.update(camera, map, caveActive);
+            pauseMenu.update(camera);
+            mainMenu.update();
+
+            const bool waiting = isMultiplayer() && m_net.waitingForTick();
+            if (m_gameState != GameState::CavePlay || m_gameIsPaused || m_quitConfirmOpen)
+                inputSystem.consumeGameplayLatch();
+            else if (Utils::TickCounter::onTick() && !waiting)
+                inputSystem.consumeGameplayLatch();
+
+            inputSystem.update();
+
+            if (m_revealCaveHUD && !revealCaveHUD) {
+                caveManager.startCave(getCaveFileIndex(), getCaveNumber(), &m_caveProperties, &map);
+                map.prepareForPlay();
+                camera.setBounds(map.getCameraBounds());
+                revealCaveHUD = true;
+                if (m_editorMode) levelPanel.revealInstant();
+                else              levelPanel.reveal();
+            }
+
+            if (!m_revealCaveHUD && revealCaveHUD) {
+                revealCaveHUD = false;
+                m_makeHUDDisappear ?
+                    levelPanel.disappear() :
+                    levelPanel.hide();
+                m_makeHUDDisappear = false;
+            }
+
+            if ((m_caveActive && !caveActive)) {
+                camera.setCentre(map.getCameraStartLocation());
+                caveActive = true;
+                map.updateVisibleTiles(camera);
+            }
+
+            if ((!m_caveActive && caveActive)) {
+                map.abortToMenu();
+                camera.setCentre({ 0, 0 });
+                caveActive = false;
+                m_freeCamera = false;
+                cameraOffset = { 0, 0 };
+            }
+
+            if (!(isMultiplayer() && m_net.waitingForTick()))
+                Utils::incrementGlobalCounter();
+        }
+        if (logicSteps >= kMaxLogicSteps)
+            logicAccum = 0.f;
+
+        // ---- Render latest logic state (may run more often than 64 Hz) ----
+        const bool parasiteView = caveActive && map.isLocalJimParasiteInfested();
         rt.setView(camera.view());
         rt.clear(sf::Color::Black);
 
         if (caveActive) {
-            map.update(camera);
-            cameraTarget = map.updateCameraLocation(camera, cameraOffset);
+            rt.draw(map, shaderManager.currentShader());
+
+            const sf::View screenView(sf::FloatRect(
+                { 0.f, 0.f },
+                { static_cast<float>(SCREEN_WIDTH), static_cast<float>(SCREEN_HEIGHT) }));
+            const float fxTime = static_cast<float>(globalCounter) * 0.14f;
+            const bool wantLiquidWave = waterWaveOk && map.hasLiquidWaveFx();
+            const bool wantAgentWave = agentWaveOk && map.hasAgentWaveFx();
+
+            // Water caustic/distort + lava distort-only wave (cave preview, before HUD).
+            if (wantLiquidWave) {
+                waterMaskRt.setView(camera.view());
+                waterMaskRt.clear(sf::Color::Black);
+                map.drawWaterMask(waterMaskRt);
+                map.drawLavaMask(waterMaskRt);
+                waterMaskRt.display();
+
+                {
+                    // Use Camera getters (same centre the view was set from when drawing).
+                    const sf::Vector2f c = camera.getCenter();
+                    const sf::Vector2f s = camera.getSize();
+                    waterWaveShader.setUniform("viewCenter", sf::Glsl::Vec2{ c.x, c.y });
+                    waterWaveShader.setUniform("viewSize", sf::Glsl::Vec2{ s.x, s.y });
+                }
+                {
+                    const bool fixed = getGameOptions().fixedColours;
+                    waterWaveShader.setUniform("tint", fixed
+                        ? sf::Glsl::Vec3{ 0.5f, 0.5f, 0.5f }
+                        : sf::Glsl::Vec3{
+                            static_cast<float>(std::clamp(getHue(), 0, 200)) / 200.f,
+                            static_cast<float>(std::clamp(getSat(), 0, 200)) / 200.f,
+                            static_cast<float>(std::clamp(getLum(), 0, 200)) / 200.f,
+                        });
+                }
+                waterWaveShader.setUniform("time", fxTime);
+                waterWaveShader.setUniform("waterMask", waterMaskRt.getTexture());
+
+                rt.display();
+                parasiteColorRt.setView(screenView);
+                parasiteColorRt.clear(sf::Color::Black);
+                parasiteColorRt.draw(sf::Sprite(rt.getTexture()), &waterWaveShader);
+                parasiteColorRt.display();
+
+                rt.setView(screenView);
+                rt.clear(sf::Color::Black);
+                rt.draw(sf::Sprite(parasiteColorRt.getTexture()));
+            }
+
+            // Aggro Agent expanding square distort — batch centres (shader holds 8/pass).
+            if (wantAgentWave) {
+                {
+                    const sf::Vector2f c = camera.getCenter();
+                    const sf::Vector2f s = camera.getSize();
+                    agentWaveShader.setUniform("viewCenter", sf::Glsl::Vec2{ c.x, c.y });
+                    agentWaveShader.setUniform("viewSize", sf::Glsl::Vec2{ s.x, s.y });
+                }
+                agentWaveShader.setUniform("time", fxTime);
+
+                const int centerTotal = static_cast<int>(map.agentWaveCenters().size());
+                bool resultInRt = true;
+                for (int offset = 0; offset < centerTotal;
+                    offset += Cave::Entity::Agent::WAVE_CENTER_CAP) {
+                    bindAgentWaveCenters(agentWaveShader, map, offset);
+                    if (resultInRt) {
+                        rt.display();
+                        parasiteColorRt.setView(screenView);
+                        parasiteColorRt.clear(sf::Color::Black);
+                        parasiteColorRt.draw(sf::Sprite(rt.getTexture()), &agentWaveShader);
+                        parasiteColorRt.display();
+                        resultInRt = false;
+                    }
+                    else {
+                        rt.setView(screenView);
+                        rt.clear(sf::Color::Black);
+                        rt.draw(sf::Sprite(parasiteColorRt.getTexture()), &agentWaveShader);
+                        rt.display();
+                        resultInRt = true;
+                    }
+                }
+                if (!resultInRt) {
+                    rt.setView(screenView);
+                    rt.clear(sf::Color::Black);
+                    rt.draw(sf::Sprite(parasiteColorRt.getTexture()));
+                }
+            }
+
+            // Color blend + wave wobble only on the cave preview (not HUD / pause / menus).
+            if (parasiteView && colorBlendOk) {
+                const bool fixed = getGameOptions().fixedColours;
+                colorBlendShader.setUniform("tint", fixed
+                    ? sf::Glsl::Vec3{ 0.5f, 0.5f, 0.5f }
+                    : sf::Glsl::Vec3{
+                        static_cast<float>(std::clamp(getHue(), 0, 200)) / 200.f,
+                        static_cast<float>(std::clamp(getSat(), 0, 200)) / 200.f,
+                        static_cast<float>(std::clamp(getLum(), 0, 200)) / 200.f,
+                    });
+                colorBlendShader.setUniform("time", fxTime);
+
+                rt.display();
+                parasiteColorRt.setView(screenView);
+                parasiteColorRt.clear(sf::Color::Black);
+                parasiteColorRt.draw(sf::Sprite(rt.getTexture()), &colorBlendShader);
+                parasiteColorRt.display();
+
+                rt.setView(screenView);
+                rt.clear(sf::Color::Black);
+                rt.draw(sf::Sprite(parasiteColorRt.getTexture()));
+            }
+
+            // Spawn / death / respawn loading tiles stay sharp above cave post-FX.
+            if (map.hasLoadingOverlays()) {
+                rt.setView(camera.view());
+                map.drawLoadingOverlays(rt);
+            }
         }
 
+        // HUD / overlays on the stable camera view.
         rt.setView(camera.view());
 
-        update();
+        if (m_freeCamera) {
+            sf::Vector2f markerPos = camera.getCenter();
+            cameraCenter.update(camera, markerPos);
+            rt.draw(cameraCenter);
+        }
 
-        shaderManager.update();
-
-        cameraPositionDisplay.update(camera, "Camera", { camera.getCenter().x, camera.getCenter().y }, 16.0);
-        cameraOffsetDisplay.update(camera, "Offset", { cameraOffset.x, cameraOffset.y }, 35.0);
-        cameraCenter.update(camera, cameraTarget);
-        fpsCounter.update(camera);
-        levelPanel.update(camera);
-        mainMenu.update();
-
-        if (caveActive) rt.draw(map, shaderManager.currentShader());
-
-        if (cameraOffset.x != 0 || cameraOffset.y != 0) {
+        if (developerMode() && (cameraOffset.x != 0 || cameraOffset.y != 0)) {
+            cameraPositionDisplay.update(camera, "Camera", { camera.getCenter().x, camera.getCenter().y }, 16.0);
+            cameraOffsetDisplay.update(camera, "Offset", { cameraOffset.x, cameraOffset.y }, 35.0);
+            fpsCounter.update(camera);
             rt.draw(jimPositionDisplay);
             rt.draw(cameraPositionDisplay);
             rt.draw(cameraOffsetDisplay);
             rt.draw(fpsCounter);
-            rt.draw(cameraCenter);
+            if (!m_freeCamera) {
+                cameraCenter.update(camera, cameraTarget);
+                rt.draw(cameraCenter);
+            }
         }
         if (!caveActive) rt.draw(mainMenu, shaderManager.defaultShader());
 
+        // Inventory draws its own chrome without tint.frag (outline/bg/numbers).
+        rt.draw(inventoryMenu, shaderManager.defaultShader());
         rt.draw(levelPanel, shaderManager.defaultShader());
+        rt.draw(pauseMenu, shaderManager.defaultShader());
 
         rt.display();
 
-        inputSystem.update();
-
-        // ---- Stretch virtual screen to fill the real window -----------------
-        window.setView(makeWindowView());
-        window.clear(sf::Color::Black);
-        window.draw(sf::Sprite(rt.getTexture()));
+        Utils::presentPrescaled(window, rt, SCREEN_WIDTH, SCREEN_HEIGHT, presentShaderPtr,
+            false, presentTarget, &presentMidRt);
         if (showProps) ImGui::SFML::Render(window);
         window.display();
 
-        if (m_revealCaveHUD && !revealCaveHUD) {
-            caveManager.startCave(getCaveFileIndex(), getCaveNumber(), &m_caveProperties, &map);
-            map.prepareForPlay();
-            camera.setBounds(map.getCameraBounds());
-            revealCaveHUD = true;
-            if (m_editorMode) levelPanel.revealInstant();
-            else              levelPanel.reveal();
+        if (!windowShown) {
+            window.setVisible(true);
+#ifdef _WIN32
+            if (HWND hwnd = static_cast<HWND>(window.getNativeHandle())) {
+                ShowWindow(hwnd, SW_SHOW);
+                if (m_editorFullscreen)
+                    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                        SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW);
+            }
+#endif
+            windowShown = true;
         }
-
-        if (!m_revealCaveHUD && revealCaveHUD) {
-            revealCaveHUD = false;
-            m_makeHUDDisappear ?
-                levelPanel.disappear() :
-                levelPanel.hide();
-            m_makeHUDDisappear = false;
-        }
-
-        if ((m_caveActive && !caveActive)) {
-            camera.setCentre(map.getCameraStartLocation());
-            caveActive = true;
-        }
-
-        if ((!m_caveActive && caveActive)) {
-            camera.setCentre({ 0, 0 });
-            caveActive = false;
-        }
-
-        if (map.requiresReset()) {
-            caveManager.startCave(getCaveFileIndex(), getCaveNumber(), &m_caveProperties, &map);
-            map.prepareForPlay();
-            camera.setBounds(map.getCameraBounds());
-            if (map.resetCameraPosition()) camera.setCentre(map.getCameraStartLocation());
-        }
-
-        Utils::incrementGlobalCounter();
     }
+
+#ifdef _WIN32
+    LockSetForegroundWindow(LSFW_UNLOCK);
+    HWND hwnd = static_cast<HWND>(window.getNativeHandle());
+    if (hwnd && g_prevWndProc) {
+        SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_prevWndProc));
+        g_prevWndProc = nullptr;
+    }
+#endif
 }
 
 void Game::update() {
@@ -606,11 +1151,17 @@ void Game::update() {
         break;
 
     case GameState::CavePlay:
-        // Decrease timer once per second while cave is active
-        if (!m_gameIsPaused && m_time > 0) m_time--;
+        if (m_caveProperties.unlimitedTime) {
+            m_time = static_cast<int>(TIME_MAX) * 64 + 63;
+        }
+        else if (!m_gameIsPaused && m_time > 0 && !m_freezeCaveTimer && !(isMultiplayer() && m_net.waitingForTick())) {
+            m_time--;
+        }
         break;
 
     case GameState::CavePass:
+        if (m_caveProperties.unlimitedTime)
+            break;
         // Convert leftover time into bonus points at end of cave
         if (m_time > 0) {
             m_score++;
@@ -699,6 +1250,35 @@ int Game::getLives() const {
     return m_lives;
 }
 
+void Game::addLives(int amount) {
+    if (amount == 0) return;
+    m_lives = std::max(0, m_lives + amount);
+}
+
+void Game::addTimeSeconds(int seconds) {
+    if (seconds == 0) return;
+    if (m_gameState == GameState::GameDone || m_gameState == GameState::GameOver) return;
+    if (unlimitedCaveTime()) return;
+    m_time = std::max(0, m_time + seconds * 64);
+}
+
+int Game::getTimeTicks() const {
+    return m_time;
+}
+
+void Game::setTimeTicks(int ticks) {
+    if (m_gameState == GameState::GameDone || m_gameState == GameState::GameOver) return;
+    m_time = std::max(0, ticks);
+}
+
+void Game::setCollected(int count) {
+    m_collected = std::max(0, count);
+}
+
+void Game::setScore(int score) {
+    m_score = std::max(0, score);
+}
+
 int Game::getScore() const {
     return m_score;
 }
@@ -731,6 +1311,10 @@ bool Game::isGamePaused() const {
     return m_gameIsPaused;
 }
 
+bool Game::isQuitConfirmOpen() const {
+    return m_quitConfirmOpen;
+}
+
 bool Game::isGameCompleted() const {
     return m_gameState == GameState::GameDone;
 }
@@ -741,6 +1325,10 @@ bool Game::isGameOver() const {
 
 bool Game::onMainMenu() const {
     return m_gameState == GameState::MainMenu;
+}
+
+bool Game::onCavePass() const {
+    return m_gameState == GameState::CavePass;
 }
 
 int Game::getCaveFileIndex() {
@@ -765,6 +1353,10 @@ bool Game::cheatMode() const {
     return m_cheatMode || m_developerMode;
 }
 
+bool Game::isFreeCamera() const {
+    return m_freeCamera && cheatMode();
+}
+
 bool Game::caveQuotaReached() const {
     return m_collected >= m_caveProperties.quota;
 }
@@ -778,7 +1370,8 @@ bool Game::isTimeWarning() const {
 // ----------------------------------------------------------------------------------
 
 int Game::initialCaveTime() const {
-    return m_caveProperties.time * 64 + 63;
+    const uint32_t seconds = m_caveProperties.unlimitedTime ? TIME_MAX : m_caveProperties.time;
+    return static_cast<int>(seconds) * 64 + 63;
 }
 
 void Game::resetCaveState() {
@@ -786,6 +1379,8 @@ void Game::resetCaveState() {
     m_time = initialCaveTime();
     m_collected = 0;
     m_gameIsPaused = false;
+    m_quitConfirmOpen = false;
+    m_freezeCaveTimer = false;
 }
 
 void Game::resetGame() {
@@ -802,7 +1397,9 @@ void Game::checkExtraLife() {
 }
 
 void Game::setRefreshrate() {
-    window.setFramerateLimit(64);
+    // Logic runs on a fixed 64 Hz step; render follows the display (vsync).
+    window.setVerticalSyncEnabled(true);
+    window.setFramerateLimit(0);
 }
 
 GameSettings Game::getGameOptions() const {
@@ -818,4 +1415,59 @@ void Game::commitGameOptions(const GameSettings& options) {
     if (startMusic) sendSignal(GameSignal::StartMusic);
     if (stopMusic) sendSignal(GameSignal::StopMusic);
     saveGameOptionsToFile(m_settings, SETTINGS_FILE);
+}
+
+const Net::PlayerInput& Game::mpInput(int id) const {
+    static const Net::PlayerInput empty;
+    if (id < 0 || id >= Net::MaxPlayers) return empty;
+    return m_mpInputs[static_cast<size_t>(id)];
+}
+
+void Game::handleTextInput(std::uint32_t unicode) {
+    m_textChar = unicode;
+}
+
+std::uint32_t Game::takeTextInput() {
+    const std::uint32_t ch = m_textChar;
+    m_textChar = 0;
+    return ch;
+}
+
+void Game::pollNetwork() {
+    m_net.poll(1.f / 64.f);
+    if (m_net.consumePartyEnded() && m_gameState != GameState::MainMenu)
+        sendSignal(GameSignal::GotoMainMenu);
+
+    const Net::PlayerInput local = sampleLocalInput();
+    if (isMultiplayer())
+        m_net.submitLocalInput(local);
+    m_mpInputs[0] = local;
+}
+
+Net::PlayerInput Game::sampleLocalInput() const {
+    Net::PlayerInput local;
+    local.up = inputSystem.gameplayHeld(Input::Action::MoveUp);
+    local.down = inputSystem.gameplayHeld(Input::Action::MoveDown);
+    local.left = inputSystem.gameplayHeld(Input::Action::MoveLeft);
+    local.right = inputSystem.gameplayHeld(Input::Action::MoveRight);
+    local.collect = inputSystem.gameplayHeld(Input::Action::Collect);
+    local.selfDestruct = inputSystem.gameplayHeld(Input::Action::SelfDestruct);
+    return local;
+}
+
+bool Game::consumeSimTick() {
+    if (!isMultiplayer()) {
+        m_mpInputs[0] = sampleLocalInput();
+        return true;
+    }
+    return m_net.tryBeginSimTick(m_mpInputs);
+}
+
+Game::DoorCount Game::countCaveDoors(int fileIndex, int caveNumber) const {
+    if (m_doorLookup) return m_doorLookup(fileIndex, caveNumber);
+    return {};
+}
+
+void Game::setCaveDoorLookup(const std::function<DoorCount(int, int)>& lookup) {
+    m_doorLookup = lookup;
 }
